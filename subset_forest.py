@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import argparse
 import pdb
 from sklearn import tree as sktree
 from sklearn.ensemble import RandomForestClassifier, BaggingClassifier
@@ -7,6 +8,11 @@ from sklearn.ensemble.forest import ForestClassifier
 from sklearn.cross_validation import KFold
 from sklearn.metrics.scorer import check_scoring
 
+ap = argparse.ArgumentParser()
+ap.add_argument('data-file', type=str, help='path to the raw data file')
+ap.add_argument('--label', type=str, default='dropout_1'
+                help='label we are trying to predict')
+args = ap.parse_args()
 
 def test_random_forest(X, y):
     X = np.nan_to_num(X)
@@ -43,7 +49,8 @@ def test_random_subspaces(X, y):
     print 'Random subspaces: mean = %f, std = %f' % (npres.mean(), npres.std())
 
 
-def test_random_small_forests(df, labels, subsets=None, n_subsets=25, subset_size=4):
+def test_random_subset_forests(df, labels, subsets=None, n_subsets=25,
+                               subset_size=4):
     classifier = SubsetForest(df, labels, subsets, n_subsets, subset_size)
     X = np.nan_to_num(df.as_matrix())
     pdb.set_trace()
@@ -58,7 +65,8 @@ def test_random_small_forests(df, labels, subsets=None, n_subsets=25, subset_siz
 
         # score the superclassifier
         scorer = check_scoring(classifier, scoring='roc_auc')
-        print 'Random subspace forest: Total score =', scorer(classifier, X_test, y_test)
+        print 'Random subspace forest: Total score =', scorer(classifier,
+                                                              X_test, y_test)
 
 
 
@@ -127,14 +135,10 @@ class SubsetForest(ForestClassifier):
         return proba
 
 def main():
-    df = pd.read_csv(open('./3091x_f12_combined.csv'))
-    labels = df['dropout'].values
-    del df['dropout']
+    df = pd.read_csv(open(args.data_file))
+    labels = df[args.label].values
+    del df[args.label]
 
-    #test_random_subspaces(df.as_matrix(), labels)
-    #test_random_forest(df.as_matrix(), labels)
+    test_random_subset_forests(df, labels)
 
-    test_random_small_forests(df, labels)
-
-if __name__ == '__main__':
-    main()
+if _main()
