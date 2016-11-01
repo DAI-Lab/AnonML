@@ -12,6 +12,10 @@ ap = argparse.ArgumentParser()
 ap.add_argument('data_file', type=str, help='path to the raw data file')
 ap.add_argument('--label', type=str, default='dropout_1',
                 help='label we are trying to predict')
+ap.add_argument('--num-subsets', type=int, default=20,
+                help='number of subsets to generate')
+ap.add_argument('--subset-size', type=int, default=4,
+                help='number of features per generated subset')
 args = ap.parse_args()
 
 
@@ -20,11 +24,11 @@ def test_classifier(classifier, X, y, **kwargs):
     y = np.array(y)
     folds = KFold(y.shape[0], n_folds=3, shuffle=True)
     results = []
+    clf = classifier(**kwargs)
     for train_index, test_index in folds:
         # make 3 folds of the data for training
         X_train, X_test = X[train_index], X[test_index]
         y_train, y_test = y[train_index], y[test_index]
-        clf = classifier(**kwargs)
         clf.fit(X_train, y_train)
 
         # score the superclassifier
@@ -32,8 +36,8 @@ def test_classifier(classifier, X, y, **kwargs):
         results.append(scorer(clf, X_test, y_test))
 
     npres = np.array(results)
-    print 'Results (%s): mean = %f, std = %f' % (classifier, npres.mean(),
-                                                 npres.std())
+    print 'Results (%s): mean = %f, std = %f' % (classifier.__name__,
+                                                 npres.mean(), npres.std())
 
 
 def main():
@@ -46,7 +50,8 @@ def main():
     test_classifier(classifier=RandomForestClassifier, X=df.as_matrix(),
                     y=labels)
     test_classifier(classifier=SubsetForest, X=df.as_matrix(), y=labels, df=df,
-                    labels=labels, subsets=None, n_subsets=25, subset_size=4)
+                    labels=labels, subsets=None, n_subsets=args.num_subsets,
+                    subset_size=args.subset_size)
 
 
 if __name__ == '__main__':

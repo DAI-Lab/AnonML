@@ -16,7 +16,6 @@ class SubsetForest(ForestClassifier):
             self.cols = {}
 
             # generate n_subsets subsets of subset_size features each
-            print 'trying to generate %d random subsets...' % n_subsets
             shuf_cols = list(df.columns)
             shuffle(shuf_cols)
 
@@ -28,8 +27,6 @@ class SubsetForest(ForestClassifier):
                 subset = tuple(df.columns.get_loc(c) for c in cols)
                 self.subsets.append(subset)
                 self.cols[subset] = cols
-
-            print 'generated %d non-overlapping subsets.' % len(self.subsets)
 
     def fit(self, X, y):
         # for each subset of features, make & train a decision tree
@@ -58,10 +55,10 @@ class SubsetForest(ForestClassifier):
                 score = scorer(tree, X_test_sub, y_test)
                 self.scores[ss] += score / n_folds
 
-        for ss, score in sorted(self.scores.items(), key=lambda i: -i[1]):
+        for ss, score in sorted(self.scores.items(), key=lambda i: -i[1])[:3]:
             print "subset (%s): %.3f" % (', '.join(map(str, ss)), score)
-
-        self.print_cols()
+            print '\n'.join('\t%s: %s' % pair for pair in zip(ss, self.cols[ss]))
+        print
 
     def predict_proba(self, X):
         """
@@ -69,11 +66,7 @@ class SubsetForest(ForestClassifier):
         """
         proba = 0
         for subset, tree in self.trees.items():
-            proba += tree.predict_proba(X[:, subset])
+            proba += tree.predict_proba(X[:, subset]) * self.scores[subset]
 
-        proba /= len(self.trees)
+        proba /= sum(self.scores.values())
         return proba
-
-    def print_cols(self):
-        for ss, col in self.cols.items():
-            print ss, col

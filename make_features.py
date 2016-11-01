@@ -28,7 +28,10 @@ num_null = 0
 # `user` is a string identifier, `df` is a DataFrame
 def process_user_data(user, df):
     global num_yes, num_no, num_null
-    df = df[df.week >= 0]
+    try:
+        df = df[df.week >= 0]
+    except:
+        pdb.set_trace()
 
     # find the first week after our time cutoff, and the last week before it.
     next_week = df[df.week >= args.pred_time].iloc[0]
@@ -38,8 +41,6 @@ def process_user_data(user, df):
     if last_week[args.label_feat] == args.label_val:
         num_null += 1
         return None
-
-    #last_week = df[df[args.label_feat] == args.label_val].iloc[0]['week']
 
     # filter out data we can't know yet
     df = df[df.week <= args.pred_time - args.lead_time]
@@ -55,8 +56,8 @@ def process_user_data(user, df):
 
         # take the label value from the first week after our cutoff
         if f == args.label_feat:
-            label = next_week[args.label_feat]
-            if label == args.label_val:
+            label = next_week[args.label_feat] == args.label_val
+            if label:
                 num_yes += 1
             else:
                 num_no += 1
