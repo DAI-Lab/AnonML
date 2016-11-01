@@ -10,7 +10,7 @@ from subset_forest import SubsetForest
 
 ap = argparse.ArgumentParser()
 ap.add_argument('data_file', type=str, help='path to the raw data file')
-ap.add_argument('--label', type=str, default='dropout_1',
+ap.add_argument('--label', type=str, default='dropout',
                 help='label we are trying to predict')
 ap.add_argument('--num-subsets', type=int, default=20,
                 help='number of subsets to generate')

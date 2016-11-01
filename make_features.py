@@ -3,16 +3,17 @@ import numpy as np
 import argparse
 import pdb
 import csv
+import imp
 from collections import defaultdict
 from os import listdir
 from os.path import isfile, join
 
 ap = argparse.ArgumentParser()
 ap.add_argument('data_dir', type=str, help='path to the CSV user data')
-ap.add_argument('--label-feat', type=str, default='dropout_1',
-                help='feature for the label we are trying to predict')
-ap.add_argument('--label-val', type=str, default=0,
-                help='label value we are looking for')
+ap.add_argument('--feature-funcs', type=str, default='./edx_feature_funcs.py',
+                help="path to python file defining feature functions")
+ap.add_argument('--time-index', type=str, default='week',
+                help="name of the time index column in the dataframe")
 ap.add_argument('--pred-time', type=int, default=5,
                 help="week in which we make a prediction")
 ap.add_argument('--lead-time', type=int, default=1,
@@ -25,51 +26,46 @@ num_yes = 0
 num_no = 0
 num_null = 0
 
-# `user` is a string identifier, `df` is a DataFrame
-def process_user_data(user, df):
+# accepts a dataframe of user data, sorted by time, and calls feature functions
+# on the data to generate a dict of features
+def process_user_data(user, df, label_func, feature_funcs):
     global num_yes, num_no, num_null
-    try:
-        df = df[df.week >= 0]
-    except:
-        pdb.set_trace()
 
-    # find the first week after our time cutoff, and the last week before it.
-    next_week = df[df.week >= args.pred_time].iloc[0]
-    last_week = df[df.week <= args.pred_time - args.lead_time].iloc[-1]
-
-    # if someone has already dropped out before our cutoff, ignore their data.
-    if last_week[args.label_feat] == args.label_val:
+    # compute the label
+    label_name, label_val = label_func(df, pred_time=args.pred_time,
+                                       lead_time=args.lead_time)
+    if label_val is None:
         num_null += 1
         return None
 
-    # filter out data we can't know yet
-    df = df[df.week <= args.pred_time - args.lead_time]
+    # counters
+    if label_val:
+        num_yes += 1
+    else:
+        num_no += 1
 
-    features = list(df.columns)
-    features.remove('week')
-    fdict = {}
+    # add the label as the first feature
+    feature_names = [label_name]
+    feature_vals = {label_name: label_val}
 
-    for f in list(features):
-        new_feat = f + '_average'
-        features.append(new_feat)
-        last_week_val = df.iloc[-1][f]
+    # filter out data we can't know about yet
+    df = df[df[args.time_index] <= args.pred_time - args.lead_time]
 
-        # take the label value from the first week after our cutoff
-        if f == args.label_feat:
-            label = next_week[args.label_feat] == args.label_val
-            if label:
-                num_yes += 1
-            else:
-                num_no += 1
-            fdict[f] = label
-        else:
-            fdict[f] = last_week_val
-            fdict[new_feat] = np.mean(df[f])
+    # not sure what negative week values mean. before start of class?
+    df = df[df[args.time_index] >= 0]
 
-    return features, fdict
+    # compute each feature function
+    for func in feature_funcs:
+        features = func(df)
+        for name, val in features:
+            feature_names.append(name)
+            feature_vals[name] = val
+
+    return feature_names, feature_vals
 
 
 # count the frequency of negative week values in the dataset
+# this is a one-off function, not really useful for anything
 def count_neg_weeks(user_files):
     neg_wks = defaultdict(int)
     for uf in user_files:
@@ -90,6 +86,16 @@ def main():
     user_files = [f for f in listdir(args.data_dir) if
                   isfile(join(args.data_dir, f))]
 
+    print "loading feature functions..."
+    feature_funcs = []
+    module = imp.load_source('feature_funcs', args.feature_funcs)
+    for func_name in dir(module):
+        if func_name.startswith('ff_'):
+            feature_funcs.append(getattr(module, func_name))
+        elif func_name.startswith('label_'):
+            label_func = getattr(module, func_name)
+
+    print "done."
     print "processing user files..."
     out_rows = []
     pct = 5.0
@@ -101,9 +107,9 @@ def main():
 
         user = uf.replace('.csv', '')
         with open(join(args.data_dir, uf)) as f:
-            data = pd.read_csv(f)
+            df = pd.read_csv(f)
 
-        processed = process_user_data(user, data)
+        processed = process_user_data(user, df, label_func, feature_funcs)
         if processed is not None:
             features, row = processed
             out_rows.append(row)
