@@ -4,9 +4,12 @@ import argparse
 import pdb
 import csv
 import imp
-from collections import defaultdict
+import math
+import multiprocessing as mp
+from collections import defaultdict, OrderedDict
 from os import listdir
 from os.path import isfile, join
+
 
 ap = argparse.ArgumentParser()
 ap.add_argument('data_dir', type=str, help='path to the CSV user data')
@@ -18,35 +21,33 @@ ap.add_argument('--pred-time', type=int, default=5,
                 help="week in which we make a prediction")
 ap.add_argument('--lead-time', type=int, default=1,
                 help="number of weeks ahead we're trying to predict a label")
+ap.add_argument('--source-file', type=str, default=None,
+                help="load dataframe from source")
 ap.add_argument('--out-file', type=str, default='./features.csv',
                 help="where to output the resulting feature vector")
+ap.add_argument('--bucket', action='store_true', default=False,
+                help="bucket numeric values into ordered categoricals")
 args = ap.parse_args()
 
-num_yes = 0
-num_no = 0
-num_null = 0
+label_func = None
+feature_funcs = []
 
 # accepts a dataframe of user data, sorted by time, and calls feature functions
 # on the data to generate a dict of features
-def process_user_data(user, df, label_func, feature_funcs):
-    global num_yes, num_no, num_null
+def process_user_data(user_file):
+    # load user data as a Pandas DataFrame
+    with open(join(args.data_dir, user_file)) as f:
+        df = pd.read_csv(f)
 
     # compute the label
     label_name, label_val = label_func(df, pred_time=args.pred_time,
-                                       lead_time=args.lead_time)
+                                            lead_time=args.lead_time)
     if label_val is None:
-        num_null += 1
         return None
 
-    # counters
-    if label_val:
-        num_yes += 1
-    else:
-        num_no += 1
-
     # add the label as the first feature
-    feature_names = [label_name]
-    feature_vals = {label_name: label_val}
+    features = OrderedDict()
+    features[label_name] = label_val
 
     # filter out data we can't know about yet
     df = df[df[args.time_index] <= args.pred_time - args.lead_time]
@@ -56,77 +57,82 @@ def process_user_data(user, df, label_func, feature_funcs):
 
     # compute each feature function
     for func in feature_funcs:
-        features = func(df)
-        for name, val in features:
-            feature_names.append(name)
-            feature_vals[name] = val
+        features.update(func(df))
 
-    return feature_names, feature_vals
+    return features
 
+def bucket_data(df, label, buckets=10):
+    # partition continuous and integer data into buckets
+    for col in df.columns:
+        if col == label or df[col].dtype != 'float64':
+            continue
+        #df[col] = pd.qcut(df[col], buckets, labels=range(buckets))
 
-# count the frequency of negative week values in the dataset
-# this is a one-off function, not really useful for anything
-def count_neg_weeks(user_files):
-    neg_wks = defaultdict(int)
-    for uf in user_files:
-        user = uf.replace('.csv', '')
-        with open(join(args.data_dir, uf)) as f:
-            data = pd.read_csv(f)
+        #sample = df.sample(n=int(math.sqrt(len(df[col])) + 1))[col].copy()
+        sample = df[col].sort_values(inplace=False, na_position='last')
+        num_not_na = len(sample.dropna(inplace=False))
+        n = num_not_na / buckets
 
-        df = data[data.week < 0]
-        if len(df.week):
-            for i in df.week:
-                neg_wks[i] += 1
+        bucket_vals = [sample.iloc[i] for i in range(n-1, num_not_na, n)]
 
-    for item in sorted(neg_wks.items(), key=lambda w: w[1]):
-        print item
+        for i, row in df.iterrows():
+            if np.isnan(row[col]):
+                val = 0
+            else:
+                val = next((j+1 for j, b in enumerate(bucket_vals)
+                            if b >= row[col]),
+                           buckets)
+            df.set_value(i, col, val)
+        df[col] = df[col].astype(int)
+        print col, ', '.join('%.2f' % b for b in bucket_vals)
+
+    return df
 
 
 def main():
-    user_files = [f for f in listdir(args.data_dir) if
-                  isfile(join(args.data_dir, f))]
+    if args.source_file:
+        df = pd.read_csv(args.source_file)
+    else:
+        user_files = [f for f in listdir(args.data_dir) if
+                      isfile(join(args.data_dir, f))]
 
-    print "loading feature functions..."
-    feature_funcs = []
-    module = imp.load_source('feature_funcs', args.feature_funcs)
-    for func_name in dir(module):
-        if func_name.startswith('ff_'):
-            feature_funcs.append(getattr(module, func_name))
-        elif func_name.startswith('label_'):
-            label_func = getattr(module, func_name)
+        print "loading feature functions..."
+        module = imp.load_source('feature_funcs', args.feature_funcs)
+        global feature_funcs, label_func
+        for func_name in dir(module):
+            if func_name.startswith('ff_'):
+                feature_funcs.append(getattr(module, func_name))
+            elif func_name.startswith('label_'):
+                label_func = getattr(module, func_name)
 
-    print "done."
-    print "processing user files..."
-    out_rows = []
-    pct = 5.0
-    for i, uf in enumerate(user_files):
-        complete = (float(i) / len(user_files)) * 100.0
-        if complete > pct:
-            print '%.0f%% complete' % complete
-            pct += 5.0
+        print "done."
+        print "processing user files..."
 
-        user = uf.replace('.csv', '')
-        with open(join(args.data_dir, uf)) as f:
-            df = pd.read_csv(f)
+        pool = mp.Pool(8)
+        all_rows = pool.map(process_user_data, user_files)
+        out_rows = filter(lambda r: r is not None, all_rows)
+        df = pd.DataFrame(out_rows)
 
-        processed = process_user_data(user, df, label_func, feature_funcs)
-        if processed is not None:
-            features, row = processed
-            out_rows.append(row)
+        print "done."
 
-    print "done."
+        num_yes = np.sum(df[label_name])
+        num_no = len(df[label_name]) - num_yes
+        num_null = len(all_rows) - len(out_rows)
+        print "num_yes =", num_yes
+        print "num_no =", num_no
+        print "num_null =", num_null
+
+    label_name = df.columns[0]
+    if args.bucket:
+        print "bucketing data..."
+        df = bucket_data(df, label_name)
+        print "done."
+
     print "writing to csv..."
-
     with open(args.out_file, 'w') as outfile:
-        writer = csv.DictWriter(outfile, features)
-        writer.writeheader()
-        for r in out_rows:
-            writer.writerow(r)
-
+        df.to_csv(outfile, index=False)
     print "done."
-    print "num_yes =", num_yes
-    print "num_no =", num_no
-    print "num_null =", num_null
+
 
 if __name__ == '__main__':
    main()

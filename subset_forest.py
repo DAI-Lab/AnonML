@@ -7,14 +7,26 @@ from sklearn.metrics.scorer import check_scoring
 
 class SubsetForest(ForestClassifier):
     def __init__(self, df, labels, subsets=None, n_subsets=20, subset_size=4):
+        """
+        df: dataframe of training data (no label column)
+        labels: series of boolean labels
+        subsets: list of lists of column names in the dataframe
+        n_subsets: if subsets not provided, generate this many random ones
+        subset_size: if subsets not provided, generate subsets of this size
+        """
         self.labels = labels
         self.subsets = subsets
         self._estimator_type = "classifier"
         self._n_outputs = 1
-        if subsets is None:
-            self.subsets = []
-            self.cols = {}
+        self.subsets = []
+        self.cols = {}
 
+        if subsets is not None:
+            for ss in subsets:
+                subset = tuple(df.columns.get_loc(col) for col in ss)
+                self.subsets.append(subset)
+                self.cols[subset] = ss
+        else:
             # generate n_subsets subsets of subset_size features each
             shuf_cols = list(df.columns)
             shuffle(shuf_cols)
