@@ -1,4 +1,5 @@
 import numpy as np
+import pdb
 from random import shuffle
 from sklearn import tree as sktree
 from sklearn.ensemble.forest import ForestClassifier
@@ -6,7 +7,8 @@ from sklearn.cross_validation import KFold
 from sklearn.metrics.scorer import check_scoring
 
 class SubsetForest(ForestClassifier):
-    def __init__(self, df, labels, subsets=None, n_subsets=20, subset_size=4):
+    def __init__(self, df, labels, subsets=None, n_subsets=20, subset_size=4,
+                 verbose=False):
         """
         df: dataframe of training data (no label column)
         labels: series of boolean labels
@@ -20,6 +22,7 @@ class SubsetForest(ForestClassifier):
         self._n_outputs = 1
         self.subsets = []
         self.cols = {}
+        self.verbose = verbose
 
         if subsets is not None:
             for ss in subsets:
@@ -51,7 +54,7 @@ class SubsetForest(ForestClassifier):
         self.estimators_ = self.trees.values()
 
         # for each tree, test & assign propensity score
-        n_folds = 3
+        n_folds = 6
         self.scores = {ss: 0 for ss in self.trees}
         folds = KFold(y.shape[0], n_folds=n_folds, shuffle=True)
 
@@ -65,12 +68,16 @@ class SubsetForest(ForestClassifier):
                 scorer = check_scoring(tree, scoring='roc_auc')
                 X_test_sub = X_test[:, ss]
                 score = scorer(tree, X_test_sub, y_test)
-                self.scores[ss] += score / n_folds
+                self.scores[ss] += max(score - 0.5, 0) / n_folds
 
+        if self.verbose:
+            self.print_scores()
+
+    def print_scores(self):
         for ss, score in sorted(self.scores.items(), key=lambda i: -i[1])[:3]:
             print "subset (%s): %.3f" % (', '.join(map(str, ss)), score)
-            print '\n'.join('\t%s: %s' % pair for pair in zip(ss, self.cols[ss]))
-        print
+            for pair in zip(ss, self.cols[ss]):
+                print '\t%s: %s' % pair
 
     def predict_proba(self, X):
         """

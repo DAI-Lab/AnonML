@@ -25,8 +25,8 @@ ap.add_argument('--source-file', type=str, default=None,
                 help="load dataframe from source")
 ap.add_argument('--out-file', type=str, default='./features.csv',
                 help="where to output the resulting feature vector")
-ap.add_argument('--bucket', action='store_true', default=False,
-                help="bucket numeric values into ordered categoricals")
+ap.add_argument('--buckets', type=int, default=0,
+                help="bucket numeric values into n ordered categoricals")
 args = ap.parse_args()
 
 label_func = None
@@ -61,29 +61,37 @@ def process_user_data(user_file):
 
     return features
 
-def bucket_data(df, label, buckets=10):
+def bucket_data(df, label, buckets):
     # partition continuous and integer data into buckets
     for col in df.columns:
         if col == label or df[col].dtype != 'float64':
             continue
         #df[col] = pd.qcut(df[col], buckets, labels=range(buckets))
 
+        # sample values until you get enough real ones. This doesn't work if
+        # there are too many "NaN"s.
         #sample = df.sample(n=int(math.sqrt(len(df[col])) + 1))[col].copy()
         sample = df[col].sort_values(inplace=False, na_position='last')
         num_not_na = len(sample.dropna(inplace=False))
         n = num_not_na / buckets
 
+        # these are the percentiles of the numbers in the series - dictating
+        # the boundaries of the buckets.
         bucket_vals = [sample.iloc[i] for i in range(n-1, num_not_na, n)]
 
+        # we only do this convoluted thing here to support the sampling step
+        # above. Otherwise we would just sort everything and put elements
+        # [n:i+n] into each bucket.
         for i, row in df.iterrows():
             if np.isnan(row[col]):
                 val = 0
             else:
                 val = next((j+1 for j, b in enumerate(bucket_vals)
-                            if b >= row[col]),
-                           buckets)
+                            if b >= row[col]), buckets)
             df.set_value(i, col, val)
         df[col] = df[col].astype(int)
+
+        # print out the values of the bucket delimiters
         print col, ', '.join('%.2f' % b for b in bucket_vals)
 
     return df
@@ -92,6 +100,7 @@ def bucket_data(df, label, buckets=10):
 def main():
     if args.source_file:
         df = pd.read_csv(args.source_file)
+        label_name = df.columns[0]
     else:
         user_files = [f for f in listdir(args.data_dir) if
                       isfile(join(args.data_dir, f))]
@@ -115,6 +124,7 @@ def main():
 
         print "done."
 
+        label_name = df.columns[0]
         num_yes = np.sum(df[label_name])
         num_no = len(df[label_name]) - num_yes
         num_null = len(all_rows) - len(out_rows)
@@ -122,10 +132,9 @@ def main():
         print "num_no =", num_no
         print "num_null =", num_null
 
-    label_name = df.columns[0]
-    if args.bucket:
+    if args.buckets > 0:
         print "bucketing data..."
-        df = bucket_data(df, label_name)
+        df = bucket_data(df, label_name, args.buckets)
         print "done."
 
     print "writing to csv..."
