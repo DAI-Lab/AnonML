@@ -1,3 +1,4 @@
+#!/usr/bin/python2.7
 import pandas as pd
 import numpy as np
 import argparse
@@ -29,8 +30,10 @@ ap.add_argument('--buckets', type=int, default=0,
                 help="bucket numeric values into n ordered categoricals")
 args = ap.parse_args()
 
+
 label_func = None
 feature_funcs = []
+
 
 # accepts a dataframe of user data, sorted by time, and calls feature functions
 # on the data to generate a dict of features
@@ -61,10 +64,16 @@ def process_user_data(user_file):
 
     return features
 
+
 def bucket_data(df, label, buckets):
     # partition continuous and integer data into buckets
     for col in df.columns:
-        if col == label or df[col].dtype != 'float64':
+        do_buckets = col != label and (
+            df[col].dtype == 'float64' or (
+                df[col].dtype == 'int64' and len(set(df[col])) > buckets)
+        )
+
+        if not do_buckets:
             continue
         #df[col] = pd.qcut(df[col], buckets, labels=range(buckets))
 
@@ -72,27 +81,51 @@ def bucket_data(df, label, buckets):
         # there are too many "NaN"s.
         #sample = df.sample(n=int(math.sqrt(len(df[col])) + 1))[col].copy()
         sample = df[col].sort_values(inplace=False, na_position='last')
-        num_not_na = len(sample.dropna(inplace=False))
-        n = num_not_na / buckets
+        num_num = len(sample.dropna(inplace=False))
+        n = float(num_num) / buckets
 
         # these are the percentiles of the numbers in the series - dictating
         # the boundaries of the buckets.
-        bucket_vals = [sample.iloc[i] for i in range(n-1, num_not_na, n)]
 
         # we only do this convoluted thing here to support the sampling step
         # above. Otherwise we would just sort everything and put elements
         # [n:i+n] into each bucket.
+        bucket_list = [sample.iloc[int(i*n)] for i in range(1, buckets)]
+        bucket_vals = {}
+        exact_vals = {}
+
+        idx = 0
+        for v in sorted(list(set(bucket_list))):
+            idx += 1
+            bucket_vals[v] = idx
+            if bucket_list.count(v) > 1:
+                idx += 1
+                exact_vals[v] = idx
+
+        sorted_vals = sorted(bucket_vals.items())
+
+        print 'Bucket values for %s:' % col
+        print '\tv <= %.3f' % sorted_vals[0][0]
+        for i in range(len(sorted_vals) - 1):
+            v = sorted_vals[i][0]
+            nv = sorted_vals[i+1][0]
+            if v in exact_vals:
+                print '\tv == %.3f' % v
+            print '\t%.3f < v <= %.3f' % (v, nv)
+        print '\tv > %.3f' % sorted_vals[-1][0]
+        print
+
+        num_buckets = len(bucket_vals) + len(exact_vals)
         for i, row in df.iterrows():
             if np.isnan(row[col]):
                 val = 0
+            elif row[col] in exact_vals:
+                val = exact_vals[row[col]]
             else:
-                val = next((j+1 for j, b in enumerate(bucket_vals)
-                            if b >= row[col]), buckets)
+                val = next((idx for b, idx in sorted_vals
+                            if b >= row[col]), num_buckets)
             df.set_value(i, col, val)
         df[col] = df[col].astype(int)
-
-        # print out the values of the bucket delimiters
-        print col, ', '.join('%.2f' % b for b in bucket_vals)
 
     return df
 

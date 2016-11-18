@@ -7,14 +7,11 @@ from sklearn.cross_validation import KFold
 from sklearn.metrics.scorer import check_scoring
 
 class SubsetForest(ForestClassifier):
-    def __init__(self, df, labels, subsets=None, n_subsets=20, subset_size=4,
-                 verbose=False):
+    def __init__(self, df, labels, subsets=None, verbose=False):
         """
         df: dataframe of training data (no label column)
         labels: series of boolean labels
         subsets: list of lists of column names in the dataframe
-        n_subsets: if subsets not provided, generate this many random ones
-        subset_size: if subsets not provided, generate subsets of this size
         """
         self.labels = labels
         self.subsets = subsets
@@ -24,51 +21,40 @@ class SubsetForest(ForestClassifier):
         self.cols = {}
         self.verbose = verbose
 
-        if subsets is not None:
-            for ss in subsets:
-                subset = tuple(df.columns.get_loc(col) for col in ss)
-                self.subsets.append(subset)
-                self.cols[subset] = ss
-        else:
-            # generate n_subsets subsets of subset_size features each
-            shuf_cols = list(df.columns)
-            shuffle(shuf_cols)
-
-            for i in range(n_subsets):
-                if not shuf_cols:
-                    break
-                cols = shuf_cols[:subset_size]
-                shuf_cols = shuf_cols[subset_size:]
-                subset = tuple(df.columns.get_loc(c) for c in cols)
-                self.subsets.append(subset)
-                self.cols[subset] = cols
+        for ss in subsets:
+            subset = tuple(df.columns.get_loc(col) for col in ss)
+            self.subsets.append(subset)
+            self.cols[subset] = ss
 
     def fit(self, X, y):
-        # for each subset of features, make & train a decision tree
+        # for each subset of features, train & test a decision tree
         self.trees = {}
-        for subset in self.subsets:
-            Xsub = X[:, subset]
-            self.trees[subset] = sktree.DecisionTreeClassifier()
-            self.trees[subset].fit(Xsub, y)
+        n_folds = 6
+        self.scores = {ss: 0 for ss in self.subsets}
+
+        for ss in self.subsets:
+            # train each subset on a different set of folds
+            folds = KFold(y.shape[0], n_folds=n_folds, shuffle=True)
+            for train_index, test_index in folds:
+                # make n folds of the data for training
+                X_train, X_test = X[train_index], X[test_index]
+                y_train, y_test = y[train_index], y[test_index]
+
+                # generate a tree for each fold, and save the best one
+                X_test_sub = X_test[:, ss]
+                X_train_sub = X_train[:, ss]
+
+                tree = sktree.DecisionTreeClassifier()
+                tree.fit(X_train_sub, y_train)
+
+                scorer = check_scoring(tree, scoring='roc_auc')
+                score = (scorer(tree, X_test_sub, y_test) - 0.5) * 2
+
+                if score > self.scores[ss]:
+                    self.scores[ss] = score
+                    self.trees[ss] = tree
 
         self.estimators_ = self.trees.values()
-
-        # for each tree, test & assign propensity score
-        n_folds = 6
-        self.scores = {ss: 0 for ss in self.trees}
-        folds = KFold(y.shape[0], n_folds=n_folds, shuffle=True)
-
-        for train_index, test_index in folds:
-            # make 3 folds of the data for training
-            X_train, X_test = X[train_index], X[test_index]
-            y_train, y_test = y[train_index], y[test_index]
-
-            # score each tree on this fold, and average the results across folds
-            for ss, tree in self.trees.iteritems():
-                scorer = check_scoring(tree, scoring='roc_auc')
-                X_test_sub = X_test[:, ss]
-                score = scorer(tree, X_test_sub, y_test)
-                self.scores[ss] += max(score - 0.5, 0) / n_folds
 
         if self.verbose:
             self.print_scores()
