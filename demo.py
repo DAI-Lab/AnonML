@@ -29,10 +29,12 @@ ap.add_argument('--n-folds', type=int, default=10,
 
 def test_classifier(classifier, frame, y, perturb=0, n_folds=10, **kwargs):
     X = np.nan_to_num(frame.as_matrix())
-    y = np.array(y)
-    folds = KFold(y.shape[0], n_folds=n_folds, shuffle=True)
-    results = []
+    y = np.array(y).astype('bool')
     clf = classifier(**kwargs)
+    auc_results = []
+    f1_results = []
+
+    folds = KFold(y.shape[0], n_folds=n_folds, shuffle=True)
     for train_index, test_index in folds:
         # perturb the data if necessary
         if perturb:
@@ -47,14 +49,30 @@ def test_classifier(classifier, frame, y, perturb=0, n_folds=10, **kwargs):
 
         clf.fit(X_train, y_train)
 
+        y_pred = clf.predict(X_test)
+        print
+        print '\tPredicted/actual true:', sum(y_pred), sum(y_test)
+        print '\tPredicted/actual false:', sum(~y_pred), sum(~y_test)
+        tp, tn = sum(y_pred & y_test), sum(~y_pred & ~y_test)
+        fp, fn = sum(y_pred & ~y_test), sum(~y_pred & y_test)
+        print '\tTrue positive (rate): %d, %.3f' % (tp, float(tp) / sum(y_test))
+        print '\tTrue negative (rate): %d, %.3f' % (tn, float(tn) / sum(~y_test))
+        print '\tFalse positive (rate): %d, %.3f' % (fp, float(fp) / sum(~y_test))
+        print '\tFalse negative (rate): %d, %.3f' % (fn, float(fn) / sum(y_test))
+
         # score the superclassifier
         scorer = check_scoring(clf, scoring='roc_auc')
-        results.append(scorer(clf, X_test, y_test))
+        auc_results.append(scorer(clf, X_test, y_test))
 
-    npres = np.array(results)
-    print 'Results (%s, %d trials): mean = %f, std = %f' % \
-        (classifier.__name__, n_folds, npres.mean(), npres.std())
-    return clf, npres
+        scorer = check_scoring(clf, scoring='f1')
+        f1_results.append(scorer(clf, X_test, y_test))
+
+    np_f1 = np.array(f1_results)
+    np_auc = np.array(auc_results)
+    print 'Results (%s, %d trials):' % (classifier.__name__, n_folds)
+    print '\tF1: mean = %f, std = %f' % (np_f1.mean(), np_f1.std())
+    print '\tAUC: mean = %f, std = %f' % (np_auc.mean(), np_auc.std())
+    return clf, np_auc
 
 
 def perturb_dataframe(df, perturbation):
@@ -138,6 +156,7 @@ def generate_subsets(df, n_subsets, subset_size):
     # generate n_subsets subsets of subset_size columns each
     shuf_cols = list(df.columns)
     random.shuffle(shuf_cols)
+    subsets = []
 
     for i in range(n_subsets):
         if not shuf_cols:
@@ -145,6 +164,8 @@ def generate_subsets(df, n_subsets, subset_size):
         cols = shuf_cols[:subset_size]
         shuf_cols = shuf_cols[subset_size:]
         subsets.append(cols)
+
+    return subsets
 
 
 def compare_classifiers(df):
@@ -157,7 +178,7 @@ def compare_classifiers(df):
             for l in f:
                 subsets.append([c.strip() for c in l.split(',')])
     else:
-        subsets = generate_subsets(df, args.n_subsets, args.subset_size)
+        subsets = generate_subsets(df, args.num_subsets, args.subset_size)
 
     # test BaggingClassifier: very similar to our classifier; uses random
     # subsets of features to build decision trees
@@ -167,7 +188,7 @@ def compare_classifiers(df):
 
     # test a Random Forest classifier, the gold standard.
     test_classifier(classifier=RandomForestClassifier, frame=df, y=labels,
-                    n_folds=args.n_folds)
+                    n_folds=args.n_folds, class_weight='balanced')
 
     # test our weird whatever
     clf, npres = test_classifier(classifier=SubsetForest, frame=df,
