@@ -61,7 +61,7 @@ class SubsetForest(ForestClassifier):
                 false_pos = float(sum(y_pred & ~y_test)) / sum(~y_test)
                 false_neg = float(sum(~y_pred & y_test)) / sum(y_test)
 
-                if false_pos and false_neg and f1_score > self.scores[ss]['f1']:
+                if auc_score > self.scores[ss]['auc']:
                     self.trees[ss] = tree
                     self.scores[ss] = {'f1': f1_score,
                                        'auc': auc_score,

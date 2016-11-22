@@ -23,7 +23,7 @@ ap.add_argument('--num-subsets', type=int, default=20,
                 help='number of subsets to generate')
 ap.add_argument('--subset-size', type=int, default=3,
                 help='number of features per generated subset')
-ap.add_argument('--n-folds', type=int, default=10,
+ap.add_argument('--num-folds', type=int, default=10,
                 help='number of folds on which to test each classifier')
 
 
@@ -183,16 +183,16 @@ def compare_classifiers(df):
     # test BaggingClassifier: very similar to our classifier; uses random
     # subsets of features to build decision trees
     test_classifier(classifier=BaggingClassifier, frame=df, y=labels,
-                    n_folds=args.n_folds, max_features=4,
-                    base_estimator=sktree.DecisionTreeClassifier())
+                    n_folds=args.num_folds, max_features=4,
+                    base_estimator=sktree.DecisionTreeClassifier(class_weight='balanced'))
 
     # test a Random Forest classifier, the gold standard.
     test_classifier(classifier=RandomForestClassifier, frame=df, y=labels,
-                    n_folds=args.n_folds, class_weight='balanced')
+                    n_folds=args.num_folds, class_weight='balanced')
 
     # test our weird whatever
     clf, npres = test_classifier(classifier=SubsetForest, frame=df,
-                                 y=labels, n_folds=args.n_folds,
+                                 y=labels, n_folds=args.num_folds,
                                  perturb=args.perturbation, df=df,
                                  labels=labels, subsets=subsets)
 
@@ -214,6 +214,8 @@ def plot_perturbation(df):
         with open(args.subsets) as f:
             for l in f:
                 subsets.append([c.strip() for c in l.split(',')])
+    else:
+        subsets = generate_subsets(df, args.num_subsets, args.subset_size)
 
     x = [float(i)/10.0 for i in range(10)] #+ [.92, .94, .96, .98, .99]
     y = []
@@ -221,10 +223,8 @@ def plot_perturbation(df):
 
     for pert in x:
         clf, res = test_classifier(classifier=SubsetForest, frame=df,
-                                   y=labels, perturb=pert, n_folds=args.n_folds,
-                                   df=df, labels=labels, subsets=subsets or None,
-                                   n_subsets=args.num_subsets,
-                                   subset_size=args.subset_size)
+                                   y=labels, perturb=pert, n_folds=args.num_folds,
+                                   df=df, labels=labels, subsets=subsets)
 
         y.append(res.mean())
         yerr.append(res.std())
