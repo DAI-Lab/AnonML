@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import argparse
 import pdb
 import random
+import itertools
 
 from sklearn import tree as sktree
 from sklearn.tree import DecisionTreeClassifier
@@ -34,7 +35,7 @@ ap.add_argument('--num-folds', type=int, default=10,
                 help='number of folds on which to test each classifier')
 
 
-def test_classifier(classifier, frame, y, perturb=0, n_folds=10, **kwargs):
+def test_classifier(classifier, frame, y, perturb=0, n_folds=5, **kwargs):
     """
     Run the given classifier with the given perturbation for n_folds tests, and
     return the results.
@@ -154,7 +155,11 @@ def generate_subsets(df, n_subsets, subset_size):
             break
         cols = shuf_cols[:subset_size]
         shuf_cols = shuf_cols[subset_size:]
+
         subsets.append(cols)
+        for j in range(1, subset_size):
+            for c in itertools.combinations(cols, j):
+                subsets.append(c)
 
     return subsets
 
@@ -178,18 +183,18 @@ def compare_classifiers(df):
     test_classifier(classifier=RandomForestClassifier, frame=df, y=labels,
                     n_folds=args.num_folds, class_weight='balanced')
 
-    ## Logistic regression
-    #test_classifier(classifier=LogisticRegression, frame=df, y=labels,
-                    #n_folds=args.num_folds, C=1.0)
+    # Adaboost
+    test_classifier(classifier=AdaBoostClassifier, frame=df, y=labels,
+                    n_folds=args.num_folds)
 
-    ## 5 nearest neighbors
-    #test_classifier(classifier=KNeighborsClassifier, frame=df, y=labels,
-                    #n_folds=args.num_folds, n_neighbors=5)
+    # gradient boosting
+    test_classifier(classifier=GradientBoostingClassifier, frame=df, y=labels,
+                    n_folds=args.num_folds)
 
     # test BaggingClassifier: very similar to our classifier; uses random
     # subsets of features to build decision trees
     test_classifier(classifier=BaggingClassifier, frame=df, y=labels,
-                    n_folds=args.num_folds, max_features=args.subset_size,
+                    n_folds=args.num_folds, #max_features=args.subset_size,
                     base_estimator=sktree.DecisionTreeClassifier(
                         class_weight='balanced'))
 
@@ -234,40 +239,55 @@ def plot_subset_size_of_datasets():
     Plot performance of a few different datasets across a number of different
     subset sizes
     """
-    files = {}
-    biggest_subset = 5
-    x = range(biggest_subset)
+    files = [
+        ('edx/3091x_f12/features-wk10-ld4.csv', 'dropout', 'r'),
+        ('edx/6002x_f12/features-wk10-ld4.csv', 'dropout', 'b'),
+        ('edx/201x_sp13/features-wk10-ld4.csv', 'dropout', 'g'),
+        ('baboon_mating/raw-features.csv', 'consort', 'k'),
+    ]
+    biggest_subset = 6
+    x = range(1, biggest_subset + 1)
 
-    for f, shape in files:
+    for f, label, shape in files:
         df = pd.read_csv(f)
+        labels = df[label].values
+        del df[label]
+
+        print
+        print 'Testing different subset sizes on dataset', f
+        print
+
         y = []
         yerr = []
         for subset_size in x:
+            subsets = generate_subsets(df, -1, subset_size)
             clf, res = test_classifier(classifier=SubsetForest, frame=df,
-                                       y=labels, perturb=pert,
+                                       y=labels, perturb=0,
                                        n_folds=args.num_folds, df=df,
                                        labels=labels, subsets=subsets)
             y.append(res.mean())
             yerr.append(res.std())
 
-        plt.errorbar(x, y, shape, yerr=yerr)
+        plt.errorbar(x, y, yerr=yerr, fmt=shape)
 
-    plt.axis([0.0, 1.0, 0.5, 1.0])
+    plt.axis([0.5, biggest_subset + 0.5, 0.5, 1.0])
     plt.xlabel('subset size')
     plt.ylabel('roc_auc')
     plt.title('AUC vs. Subset Size, with Standard Deviation Error')
     plt.show()
 
 
-def plot_perturbation_of_subset_size(df):
+def plot_perturbation_of_subset_size():
     labels = df[args.label].values
     del df[args.label]
 
-    biggest_subset = 5
-    for i in range(1, biggest_subset + 1):
-        subsets = generate_subsets(df, -1, 1)
+    biggest_subset = 4
+    pairs = zip(range(1, biggest_subset + 1), ['ro', 'bo', 'go', 'rs', 'bs'])
+    for i, shape in pairs:
+        subsets = generate_subsets(df, -1, subset_size)
+        x, y, yerr = get_perturbation(df, subsets)
+        plt.errorbar(x, y, yerr=yerr)
 
-    plt.errorbar(x, y, yerr=yerr)
     plt.axis([0.0, 1.0, 0.5, 1.0])
     plt.xlabel('perturbation')
     plt.ylabel('roc_auc')
@@ -275,9 +295,17 @@ def plot_perturbation_of_subset_size(df):
     plt.show()
 
 
+def plot_binning_of_datasets(df):
+    """
+    Plot performance of a few different datasets across a number of bin sizes
+    """
+    pass
+
+
 def main():
     df = pd.read_csv(open(args.data_file))
     compare_classifiers(df)
+    #plot_subset_size_of_datasets()
     #plot_perturbations(df)
 
 

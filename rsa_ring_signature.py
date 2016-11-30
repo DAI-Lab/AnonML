@@ -1,7 +1,8 @@
 import os, hashlib, random, Crypto.PublicKey.RSA
+import numpy as np
 
 class Ring(object):
-    def __init__(self, keys, length=1024):
+    def __init__(self, keys, length=2048):
         self.keys = keys
         self.length = length
         self.n_keys = len(keys)
@@ -33,8 +34,8 @@ class Ring(object):
         r = reduce(_g, range(self.n_keys), X[0])
         return r == X[0]
 
-    def permut(self, m):
-        self.p = int(hashlib.sha1('%s' % m).hexdigest(), 16)
+    def permut(self, msg):
+        self.p = int(hashlib.sha1('%s' % msg).hexdigest(), 16)
 
     def E(self, x):
         msg = '%s%s' % (x, self.p)
@@ -49,4 +50,12 @@ class Ring(object):
         return rslt
 
 if __name__ == '__main__':
-    keys = Cry
+    n_keys = 10
+    length = 2048
+    keys = [Crypto.PublicKey.RSA.generate(length, os.urandom) for i in range(n_keys)]
+    ring = Ring(keys, length)
+    print ring.sign('hello', 1)
+    print ring.sign('hello', 1)
+    print ring.sign('world', 1)
+    print ring.sign('hello', 2)
+    print ring.sign('hello', 3)
