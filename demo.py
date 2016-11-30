@@ -5,8 +5,15 @@ import matplotlib.pyplot as plt
 import argparse
 import pdb
 import random
+
 from sklearn import tree as sktree
-from sklearn.ensemble import RandomForestClassifier, BaggingClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier, BaggingClassifier, \
+                             AdaBoostClassifier, GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+from sklearn.naive_bayes import GaussianNB
 from sklearn.cross_validation import KFold
 from sklearn.metrics.scorer import check_scoring
 from subset_forest import SubsetForest
@@ -28,17 +35,23 @@ ap.add_argument('--num-folds', type=int, default=10,
 
 
 def test_classifier(classifier, frame, y, perturb=0, n_folds=10, **kwargs):
+    """
+    Run the given classifier with the given perturbation for n_folds tests, and
+    return the results.
+    """
     X = np.nan_to_num(frame.as_matrix())
     y = np.array(y).astype('bool')
     clf = classifier(**kwargs)
     auc_results = []
     f1_results = []
+    acc_results = []
 
     folds = KFold(y.shape[0], n_folds=n_folds, shuffle=True)
     for train_index, test_index in folds:
         # perturb the data if necessary
         if perturb:
-            pframe = perturb_dataframe(frame, perturb)
+            pframe = perturb_dataframe(frame, perturb,
+                                       subsets=kwargs.get('subsets'))
             X_pert = np.nan_to_num(pframe.as_matrix())
         else:
             X_pert = X
@@ -50,15 +63,15 @@ def test_classifier(classifier, frame, y, perturb=0, n_folds=10, **kwargs):
         clf.fit(X_train, y_train)
 
         y_pred = clf.predict(X_test)
-        print
-        print '\tPredicted/actual true:', sum(y_pred), sum(y_test)
-        print '\tPredicted/actual false:', sum(~y_pred), sum(~y_test)
+        #print
+        #print '\tPredicted/actual true:', sum(y_pred), sum(y_test)
+        #print '\tPredicted/actual false:', sum(~y_pred), sum(~y_test)
         tp, tn = sum(y_pred & y_test), sum(~y_pred & ~y_test)
         fp, fn = sum(y_pred & ~y_test), sum(~y_pred & y_test)
-        print '\tTrue positive (rate): %d, %.3f' % (tp, float(tp) / sum(y_test))
-        print '\tTrue negative (rate): %d, %.3f' % (tn, float(tn) / sum(~y_test))
-        print '\tFalse positive (rate): %d, %.3f' % (fp, float(fp) / sum(~y_test))
-        print '\tFalse negative (rate): %d, %.3f' % (fn, float(fn) / sum(y_test))
+        #print '\tTrue positive (rate): %d, %.3f' % (tp, float(tp) / sum(y_test))
+        #print '\tTrue negative (rate): %d, %.3f' % (tn, float(tn) / sum(~y_test))
+        #print '\tFalse positive (rate): %d, %.3f' % (fp, float(fp) / sum(~y_test))
+        #print '\tFalse negative (rate): %d, %.3f' % (fn, float(fn) / sum(y_test))
 
         # score the superclassifier
         scorer = check_scoring(clf, scoring='roc_auc')
@@ -67,15 +80,27 @@ def test_classifier(classifier, frame, y, perturb=0, n_folds=10, **kwargs):
         scorer = check_scoring(clf, scoring='f1')
         f1_results.append(scorer(clf, X_test, y_test))
 
+        scorer = check_scoring(clf, scoring='accuracy')
+        acc_results.append(scorer(clf, X_test, y_test))
+
     np_f1 = np.array(f1_results)
     np_auc = np.array(auc_results)
+    np_acc = np.array(acc_results)
     print 'Results (%s, %d trials):' % (classifier.__name__, n_folds)
-    print '\tF1: mean = %f, std = %f' % (np_f1.mean(), np_f1.std())
+    print '\tf1: mean = %f, std = %f' % (np_f1.mean(), np_f1.std())
     print '\tAUC: mean = %f, std = %f' % (np_auc.mean(), np_auc.std())
+    print '\tAccuracy: mean = %f, std = %f' % (np_acc.mean(), np_acc.std())
     return clf, np_auc
 
 
-def perturb_dataframe(df, perturbation):
+def perturb_dataframe(df, perturbation, subsets=None):
+    """
+    For each row in the dataframe, for each subset of that row, randomly perturb
+    all the values.
+    """
+    if subsets is None:
+        subsets = [[i] for i in df.columns]
+
     # for each value in the dataframe, with 1 - perturbation probability,
     # switch the value a random bucket.
     perturb_vals = {}
@@ -93,21 +118,18 @@ def perturb_dataframe(df, perturbation):
 
     ndf = df.copy()
     for i, row in df.iterrows():
-        for col, pert in perturb_vals.iteritems():
-            val = row[col]
-            if pert[0] == 'discrete':
-                if random.random() < perturbation:
-                    val = random.choice(range(pert[1], pert[2]))
-            if pert[0] == 'continuous':
-                rng = pert[2] - pert[1]
-                # random value btwn min and max
-                if random.random() < perturbation:
-                    val = random.random() * rng + pert[1]
-                else:
-                    #noise = np.random.laplace(0.0, pert[3]/100)
-                    #val += noise
-                    pass
-            ndf.set_value(i, col, val)
+        for cols in subsets:
+            if random.random() < perturbation:
+                for col in cols:
+                    pert = perturb_vals[col]
+                    val = row[col]
+                    if pert[0] == 'discrete':
+                        val = random.choice(range(pert[1], pert[2]))
+                    if pert[0] == 'continuous':
+                        rng = pert[2] - pert[1]
+                        # random value btwn min and max
+                        val = random.random() * rng + pert[1]
+                    ndf.set_value(i, col, val)
 
     #plt.plot(range(df.shape[0]), df['gen_distance'])
     #plt.plot(range(ndf.shape[0]), ndf['gen_distance'], 'ro')
@@ -117,46 +139,15 @@ def perturb_dataframe(df, perturbation):
     return ndf
 
 
-def perturb_matrix(X, perturbation):
-    # for each value in the dataframe, with 1 - perturbation probability,
-    # switch the value a random bucket.
-    perturb_vals = {}
-    for col, val in enumerate(X[0]):
-        series = X[:, col]
-        if series.dtype == 'int64' or series.dtype == 'object':
-            perturb_vals[col] = ('discrete', int(np.min(series)),
-                                 int(np.max(series)))
-        if series.dtype == 'float64':
-            diffs = np.diff(np.sort(series))
-            min_diff = np.min(diffs[np.nonzero(diffs)])
-            perturb_vals[col] = ('continuous', np.min(series),
-                                 np.max(series), min_diff)
-
-    nX = X.copy()
-    for i in xrange(nX.shape[0]):
-        for j, pert in perturb_vals.iteritems():
-            val = nX[i, j]
-            if pert[0] == 'discrete':
-                if random.random() < perturbation:
-                    val = random.choice(range(pert[1], pert[2]))
-            if pert[0] == 'continuous':
-                rng = pert[2] - pert[1]
-                # random value btwn min and max
-                if random.random() < perturbation:
-                    val = random.random() * rng + pert[1]
-                else:
-                    noise = np.random.laplace(0.0, pert[3]/8)
-                    val += noise
-            nX[i, j] = val
-
-    return nX
-
-
 def generate_subsets(df, n_subsets, subset_size):
-    # generate n_subsets subsets of subset_size columns each
+    """
+    Generate n_subsets random, non-overlapping subsets of subset_size columns each
+    """
     shuf_cols = list(df.columns)
     random.shuffle(shuf_cols)
     subsets = []
+    if n_subsets < 0:
+        n_subsets = len(shuf_cols)
 
     for i in range(n_subsets):
         if not shuf_cols:
@@ -169,6 +160,9 @@ def generate_subsets(df, n_subsets, subset_size):
 
 
 def compare_classifiers(df):
+    """
+    Run a bunch of different classifiers on one dataset and print the results
+    """
     labels = df[args.label].values
     del df[args.label]
 
@@ -180,15 +174,24 @@ def compare_classifiers(df):
     else:
         subsets = generate_subsets(df, args.num_subsets, args.subset_size)
 
-    # test BaggingClassifier: very similar to our classifier; uses random
-    # subsets of features to build decision trees
-    test_classifier(classifier=BaggingClassifier, frame=df, y=labels,
-                    n_folds=args.num_folds, max_features=4,
-                    base_estimator=sktree.DecisionTreeClassifier(class_weight='balanced'))
-
     # test a Random Forest classifier, the gold standard.
     test_classifier(classifier=RandomForestClassifier, frame=df, y=labels,
                     n_folds=args.num_folds, class_weight='balanced')
+
+    ## Logistic regression
+    #test_classifier(classifier=LogisticRegression, frame=df, y=labels,
+                    #n_folds=args.num_folds, C=1.0)
+
+    ## 5 nearest neighbors
+    #test_classifier(classifier=KNeighborsClassifier, frame=df, y=labels,
+                    #n_folds=args.num_folds, n_neighbors=5)
+
+    # test BaggingClassifier: very similar to our classifier; uses random
+    # subsets of features to build decision trees
+    test_classifier(classifier=BaggingClassifier, frame=df, y=labels,
+                    n_folds=args.num_folds, max_features=args.subset_size,
+                    base_estimator=sktree.DecisionTreeClassifier(
+                        class_weight='balanced'))
 
     # test our weird whatever
     clf, npres = test_classifier(classifier=SubsetForest, frame=df,
@@ -205,45 +208,80 @@ def compare_classifiers(df):
             f.write(','.join(cols) + '\n')
 
 
-def plot_perturbation(df):
-    labels = df[args.label].values
-    del df[args.label]
-
-    subsets = []
-    if args.subsets:
-        with open(args.subsets) as f:
-            for l in f:
-                subsets.append([c.strip() for c in l.split(',')])
-    else:
-        subsets = generate_subsets(df, args.num_subsets, args.subset_size)
-
+def get_perturbation(df, subsets):
+    """
+    Calculate the performance of a classifier for every perturbation level in
+    {0, 0.1, ..., 0.9}
+    """
     x = [float(i)/10.0 for i in range(10)] #+ [.92, .94, .96, .98, .99]
     y = []
     yerr = []
 
     for pert in x:
         clf, res = test_classifier(classifier=SubsetForest, frame=df,
-                                   y=labels, perturb=pert, n_folds=args.num_folds,
-                                   df=df, labels=labels, subsets=subsets)
+                                   y=labels, perturb=pert,
+                                   n_folds=args.num_folds, df=df,
+                                   labels=labels, subsets=subsets)
 
         y.append(res.mean())
         yerr.append(res.std())
 
+    return x, y, yerr
+
+
+def plot_subset_size_of_datasets():
+    """
+    Plot performance of a few different datasets across a number of different
+    subset sizes
+    """
+    files = {}
+    biggest_subset = 5
+    x = range(biggest_subset)
+
+    for f, shape in files:
+        df = pd.read_csv(f)
+        y = []
+        yerr = []
+        for subset_size in x:
+            clf, res = test_classifier(classifier=SubsetForest, frame=df,
+                                       y=labels, perturb=pert,
+                                       n_folds=args.num_folds, df=df,
+                                       labels=labels, subsets=subsets)
+            y.append(res.mean())
+            yerr.append(res.std())
+
+        plt.errorbar(x, y, shape, yerr=yerr)
+
+    plt.axis([0.0, 1.0, 0.5, 1.0])
+    plt.xlabel('subset size')
+    plt.ylabel('roc_auc')
+    plt.title('AUC vs. Subset Size, with Standard Deviation Error')
+    plt.show()
+
+
+def plot_perturbation_of_subset_size(df):
+    labels = df[args.label].values
+    del df[args.label]
+
+    biggest_subset = 5
+    for i in range(1, biggest_subset + 1):
+        subsets = generate_subsets(df, -1, 1)
+
     plt.errorbar(x, y, yerr=yerr)
     plt.axis([0.0, 1.0, 0.5, 1.0])
-    plt.xlabel('Perturbation')
+    plt.xlabel('perturbation')
     plt.ylabel('roc_auc')
     plt.title('AUC vs. Perturbation, with Standard Deviation Error')
     plt.show()
 
 
 def main():
-    global args
-    args = ap.parse_args()
     df = pd.read_csv(open(args.data_file))
     compare_classifiers(df)
-    #plot_perturbation(df)
+    #plot_perturbations(df)
 
 
 if __name__ == '__main__':
+    global args
+    args = ap.parse_args()
     main()

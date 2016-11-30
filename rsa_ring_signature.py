@@ -47,3 +47,6 @@ class Ring(object):
         else:
             rslt = x
         return rslt
+
+if __name__ == '__main__':
+    keys = Cry

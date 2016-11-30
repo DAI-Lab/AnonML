@@ -91,40 +91,67 @@ def bucket_data(df, label, buckets):
         # above. Otherwise we would just sort everything and put elements
         # [n:i+n] into each bucket.
         bucket_list = [sample.iloc[int(i*n)] for i in range(1, buckets)]
-        bucket_vals = {}
-        exact_vals = {}
 
-        idx = 0
-        for v in sorted(list(set(bucket_list))):
-            idx += 1
-            bucket_vals[v] = idx
-            if bucket_list.count(v) > 1:
+        if False:    # simple method
+            bucket_list = sorted(set(bucket_list))
+            for i, row in df.iterrows():
+                if np.isnan(row[col]):
+                    val = 0
+                else:
+                    val = next((idx for idx, b in enumerate(bucket_list)
+                                if b >= row[col]), len(bucket_list))
+                df.set_value(i, col, val)
+
+            print 'Bucket values for %s:' % col
+            print '\tv <= %.3f' % bucket_list[0]
+            for i in range(len(bucket_list) - 1):
+                v = bucket_list[i]
+                nv = bucket_list[i+1]
+                print '\t%.3f < v <= %.3f' % (v, nv)
+            print '\tv > %.3f' % bucket_list[-1]
+            print
+
+        else:       # more complicated method
+            bucket_vals = {}
+            exact_vals = {}
+
+            idx = 0
+            for v in sorted(list(set(bucket_list))):
                 idx += 1
-                exact_vals[v] = idx
+                bucket_vals[v] = idx
+                if bucket_list.count(v) > 1:
+                    idx += 1
+                    exact_vals[v] = idx
 
-        sorted_vals = sorted(bucket_vals.items())
+            sorted_vals = sorted(bucket_vals.items())
 
-        print 'Bucket values for %s:' % col
-        print '\tv <= %.3f' % sorted_vals[0][0]
-        for i in range(len(sorted_vals) - 1):
-            v = sorted_vals[i][0]
-            nv = sorted_vals[i+1][0]
-            if v in exact_vals:
-                print '\tv == %.3f' % v
-            print '\t%.3f < v <= %.3f' % (v, nv)
-        print '\tv > %.3f' % sorted_vals[-1][0]
-        print
+            print 'Bucket values for %s:' % col
+            print '\tv <= %.3f' % sorted_vals[0][0]
+            for i in range(len(sorted_vals) - 1):
+                v = sorted_vals[i][0]
+                nv = sorted_vals[i+1][0]
+                if v in exact_vals:
+                    print '\tv == %.3f' % v
 
-        num_buckets = len(bucket_vals) + len(exact_vals)
-        for i, row in df.iterrows():
-            if np.isnan(row[col]):
-                val = 0
-            elif row[col] in exact_vals:
-                val = exact_vals[row[col]]
-            else:
-                val = next((idx for b, idx in sorted_vals
-                            if b >= row[col]), num_buckets)
-            df.set_value(i, col, val)
+                if nv in exact_vals:
+                    print '\t%.3f < v < %.3f' % (v, nv)
+                else:
+                    print '\t%.3f < v <= %.3f' % (v, nv)
+
+            print '\tv > %.3f' % sorted_vals[-1][0]
+            print
+
+            num_buckets = len(bucket_vals) + len(exact_vals)
+            for i, row in df.iterrows():
+                if np.isnan(row[col]):
+                    val = 0
+                elif row[col] in exact_vals:
+                    val = exact_vals[row[col]]
+                else:
+                    val = next((idx for b, idx in sorted_vals
+                                if b >= row[col]), num_buckets)
+                df.set_value(i, col, val)
+
         df[col] = df[col].astype(int)
 
     return df
