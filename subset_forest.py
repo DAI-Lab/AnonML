@@ -35,7 +35,7 @@ def tree_to_code(tree, feature_names):
 
 class SubsetForest(ForestClassifier):
     def __init__(self, df, labels, subsets=None, verbose=False,
-                 tree_metric='f1', n_folds=5):
+                 tree_metric='f1', n_folds=3):
         """
         df: dataframe of training data (no label column)
         labels: series of boolean labels
@@ -61,21 +61,23 @@ class SubsetForest(ForestClassifier):
         # for each subset of features, train & test a decision tree
         self.trees = {}
         score_funcs = ['accuracy', 'roc_auc', 'f1']
-        metrics = ['accuracy', 'roc_auc', 'f1', 'fp', 'fn']
-        self.scores = pd.DataFrame(np.zeros((len(self.subsets), len(metrics))),
-                                   index=map(str, self.subsets), columns=metrics)
+        metrics = score_funcs + ['fp', 'fn']
+        self.scores = {ss: {met: 0 for met in metrics} for ss in self.subsets}
 
         y = y.astype('bool')
         self.num_true = sum(y)
         self.num_false = sum(~y)
 
-        for ss in self.subsets:
-            # train each subset on a different set of folds
-            folds = KFold(y.shape[0], n_folds=self.n_folds, shuffle=True)
-            for train_index, test_index in folds:
-                # make n folds of the data for training
-                X_train, X_test = X[train_index], X[test_index]
-                y_train, y_test = y[train_index], y[test_index]
+        # train each subset on a different set of folds
+        folds = KFold(y.shape[0], n_folds=self.n_folds, shuffle=True)
+        for i, (train_index, test_index) in enumerate(folds):
+            if self.verbose:
+                print "testing fold %d/%d" % (i+1, self.n_folds)
+            # make n folds of the data for training
+            X_train, X_test = X[train_index], X[test_index]
+            y_train, y_test = y[train_index], y[test_index]
+
+            for ss in self.subsets:
 
                 # generate a tree for each fold, and save the best one
                 X_test_sub = X_test[:, ss]
@@ -95,28 +97,41 @@ class SubsetForest(ForestClassifier):
                     scorer = check_scoring(tree, scoring=met)
                     scores[met] = scorer(tree, X_test_sub, y_test)
 
-                if scores[self.tree_metric] > self.scores[self.tree_metric][str(ss)]:
-                    self.trees[ss] = tree
-                    self.scores.loc[str(ss)] = pd.Series(scores)
+                # One metric determines whether this is the best version of
+                # the tree
+                for k in scores:
+                    self.scores[ss][k] += float(scores[k]) / self.n_folds
 
                 self.classes_ = tree.classes_
 
-        self.estimators_ = self.trees.values()
 
         if self.verbose:
-            self.print_scores()
+            print "training subset trees"
+        for i, ss in enumerate(self.subsets):
+            # train classifier on whole dataset
+            X_sub = X[:, ss]
+            tree = sktree.DecisionTreeClassifier(class_weight='balanced')
+            tree.fit(X_sub, y)
+            self.trees[ss] = tree
+
+        self.estimators_ = self.trees.values()
+
+        #if self.verbose:
+            #self.print_scores()
+
+    def predict_proba(self, X):
+        return self.predict_proba_simple(X)
 
     def print_scores(self):
-        for ss, score in sorted(self.scores.iterrows(),
-                                key= lambda i: -i[1][self.tree_metric])[:3]:
+        for ss, score in sorted(self.scores.items(),
+                                key=lambda i: -i[1][self.tree_metric])[:3]:
             print "subset %s: f1 = %.3f; roc_auc = %.3f; acc = %.3f" % \
                 (ss, score['f1'], score['roc_auc'], score['accuracy'])
 
-            subset = tuple([int(i) for i in ss[1:-1].split(',') if i != ''])
-            for pair in zip(subset, self.cols[subset]):
+            for pair in zip(ss, self.cols[ss]):
                 print '\t%s: %s' % pair
 
-            #tree_to_code(self.trees[subset], self.cols[ss])
+            #tree_to_code(self.trees[ss], self.cols[ss])
 
     def predict_proba_simple(self, X):
         """
@@ -125,13 +140,13 @@ class SubsetForest(ForestClassifier):
         proba = np.zeros((len(X), 2))
         for subset, tree in self.trees.items():
             proba += tree.predict_proba(X[:, subset]) * \
-                self.scores[self.tree_metric][str(subset)]
+                self.scores[subset][self.tree_metric]
         return proba
 
-    def predict_proba(self, X):
-        return self.predict_proba_simple(X)
-
-        # Below here is commented out for now
+    def predict_proba_complicated(self, X):
+        """
+        From Kalyan's thesis. Not used for now.
+        """
         lhs = np.zeros((len(X)))
         for subset, tree in self.trees.items():
             # True -> 1; False -> 0

@@ -1,6 +1,7 @@
 #!/usr/bin/python2.7
 import pandas as pd
 import numpy as np
+import pandas.core.algorithms as algos
 import argparse
 import pdb
 import csv
@@ -75,6 +76,19 @@ def bucket_data(df, label, buckets):
 
         if not do_buckets:
             continue
+
+        print col
+        arr = df[col].as_matrix()
+        mx = np.ma.masked_equal(arr, 0, copy=True)
+        bins = algos.quantile(arr[~mx.mask], np.linspace(0, 1, buckets+1))
+        bins = np.insert(bins, 0, 0)
+        bins[1] = bins[1] - bins[1] / 2
+        cuts = pd.tools.tile._bins_to_cuts(arr, bins, labels=range(buckets+1),
+                                           include_lowest=True)
+
+        df[col] = cuts
+        continue
+
         #df[col] = pd.qcut(df[col], buckets, labels=range(buckets))
 
         # sample values until you get enough real ones. This doesn't work if

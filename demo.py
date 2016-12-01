@@ -27,15 +27,18 @@ ap.add_argument('--perturbation', type=float, default=0,
                 help="probability of perturbation")
 ap.add_argument('--subsets', type=str, default=None,
                 help='hard-coded subset file')
-ap.add_argument('--num-subsets', type=int, default=20,
-                help='number of subsets to generate')
+ap.add_argument('--num-subsets', type=int, default=-1,
+                help='number of subsets to generate; -1 == all')
 ap.add_argument('--subset-size', type=int, default=3,
                 help='number of features per generated subset')
-ap.add_argument('--num-folds', type=int, default=10,
+ap.add_argument('--recursive-subsets', action='store_true',
+                help='generates all subsets that fit in the largest subset')
+ap.add_argument('--num-folds', type=int, default=5,
                 help='number of folds on which to test each classifier')
 
 
-def test_classifier(classifier, frame, y, perturb=0, n_folds=5, **kwargs):
+def test_classifier(classifier, frame, y, perturb=0, n_folds=5,
+                    verbose=False, **kwargs):
     """
     Run the given classifier with the given perturbation for n_folds tests, and
     return the results.
@@ -64,15 +67,21 @@ def test_classifier(classifier, frame, y, perturb=0, n_folds=5, **kwargs):
         clf.fit(X_train, y_train)
 
         y_pred = clf.predict(X_test)
-        #print
-        #print '\tPredicted/actual true:', sum(y_pred), sum(y_test)
-        #print '\tPredicted/actual false:', sum(~y_pred), sum(~y_test)
         tp, tn = sum(y_pred & y_test), sum(~y_pred & ~y_test)
         fp, fn = sum(y_pred & ~y_test), sum(~y_pred & y_test)
-        #print '\tTrue positive (rate): %d, %.3f' % (tp, float(tp) / sum(y_test))
-        #print '\tTrue negative (rate): %d, %.3f' % (tn, float(tn) / sum(~y_test))
-        #print '\tFalse positive (rate): %d, %.3f' % (fp, float(fp) / sum(~y_test))
-        #print '\tFalse negative (rate): %d, %.3f' % (fn, float(fn) / sum(y_test))
+
+        if verbose:
+            print
+            print '\tPredicted/actual true:', sum(y_pred), sum(y_test)
+            print '\tPredicted/actual false:', sum(~y_pred), sum(~y_test)
+            print '\tTrue positive (rate): %d, %.3f' % (tp, float(tp) /
+                                                        sum(y_test))
+            print '\tTrue negative (rate): %d, %.3f' % (tn, float(tn) /
+                                                        sum(~y_test))
+            print '\tFalse positive (rate): %d, %.3f' % (fp, float(fp) /
+                                                         sum(~y_test))
+            print '\tFalse negative (rate): %d, %.3f' % (fn, float(fn) /
+                                                         sum(y_test))
 
         # score the superclassifier
         scorer = check_scoring(clf, scoring='roc_auc')
@@ -124,9 +133,11 @@ def perturb_dataframe(df, perturbation, subsets=None):
                 for col in cols:
                     pert = perturb_vals[col]
                     val = row[col]
-                    if pert[0] == 'discrete':
+                    if pert[1] == pert[2]:
+                        val = pert[1]
+                    elif pert[0] == 'discrete':
                         val = random.choice(range(pert[1], pert[2]))
-                    if pert[0] == 'continuous':
+                    elif pert[0] == 'continuous':
                         rng = pert[2] - pert[1]
                         # random value btwn min and max
                         val = random.random() * rng + pert[1]
@@ -157,9 +168,10 @@ def generate_subsets(df, n_subsets, subset_size):
         shuf_cols = shuf_cols[subset_size:]
 
         subsets.append(cols)
-        for j in range(1, subset_size):
-            for c in itertools.combinations(cols, j):
-                subsets.append(c)
+        if args.recursive_subsets:
+            for j in range(1, subset_size):
+                for c in itertools.combinations(cols, j):
+                    subsets.append(c)
 
     return subsets
 
@@ -187,16 +199,16 @@ def compare_classifiers(df):
     test_classifier(classifier=AdaBoostClassifier, frame=df, y=labels,
                     n_folds=args.num_folds)
 
-    # gradient boosting
+    ## gradient boosting
     test_classifier(classifier=GradientBoostingClassifier, frame=df, y=labels,
                     n_folds=args.num_folds)
 
     # test BaggingClassifier: very similar to our classifier; uses random
     # subsets of features to build decision trees
-    test_classifier(classifier=BaggingClassifier, frame=df, y=labels,
-                    n_folds=args.num_folds, #max_features=args.subset_size,
-                    base_estimator=sktree.DecisionTreeClassifier(
-                        class_weight='balanced'))
+    #test_classifier(classifier=BaggingClassifier, frame=df, y=labels,
+                    #n_folds=args.num_folds, #max_features=args.subset_size,
+                    #base_estimator=sktree.DecisionTreeClassifier(
+                        #class_weight='balanced'))
 
     # test our weird whatever
     clf, npres = test_classifier(classifier=SubsetForest, frame=df,
@@ -213,12 +225,11 @@ def compare_classifiers(df):
             f.write(','.join(cols) + '\n')
 
 
-def get_perturbation(df, subsets):
+def get_perturbation(df, labels, x, subsets):
     """
     Calculate the performance of a classifier for every perturbation level in
     {0, 0.1, ..., 0.9}
     """
-    x = [float(i)/10.0 for i in range(10)] #+ [.92, .94, .96, .98, .99]
     y = []
     yerr = []
 
@@ -231,7 +242,7 @@ def get_perturbation(df, subsets):
         y.append(res.mean())
         yerr.append(res.std())
 
-    return x, y, yerr
+    return y, yerr
 
 
 def plot_subset_size_of_datasets():
@@ -240,13 +251,15 @@ def plot_subset_size_of_datasets():
     subset sizes
     """
     files = [
-        ('edx/3091x_f12/features-wk10-ld4.csv', 'dropout', 'r'),
+        ('edx/3091x_f12/features-wk10-ld4-bin.csv', 'dropout', 'r'),
         ('edx/6002x_f12/features-wk10-ld4.csv', 'dropout', 'b'),
         ('edx/201x_sp13/features-wk10-ld4.csv', 'dropout', 'g'),
         ('baboon_mating/raw-features.csv', 'consort', 'k'),
     ]
     biggest_subset = 6
     x = range(1, biggest_subset + 1)
+    scores = pd.DataFrame(index=x, columns=[f[0] for f in files])
+    stdevs = pd.DataFrame(index=x, columns=[f[0] for f in files])
 
     for f, label, shape in files:
         df = pd.read_csv(f)
@@ -268,7 +281,15 @@ def plot_subset_size_of_datasets():
             y.append(res.mean())
             yerr.append(res.std())
 
+            scores.set_value(subset_size, f, res.mean())
+            stdevs.set_value(subset_size, f, res.std())
+
         plt.errorbar(x, y, yerr=yerr, fmt=shape)
+
+    with open('subset-size-of-datasets-means.csv', 'w') as f:
+        scores.to_csv(f)
+    with open('subset-size-of-datasets-errs.csv', 'w') as f:
+        stdevs.to_csv(f)
 
     plt.axis([0.5, biggest_subset + 0.5, 0.5, 1.0])
     plt.xlabel('subset size')
@@ -281,12 +302,24 @@ def plot_perturbation_of_subset_size():
     labels = df[args.label].values
     del df[args.label]
 
-    biggest_subset = 4
-    pairs = zip(range(1, biggest_subset + 1), ['ro', 'bo', 'go', 'rs', 'bs'])
+    biggest_subset = 5
+    pairs = zip(range(1, biggest_subset + 1), ['r', 'b', 'g', 'y', 'ks'])
+    x = [float(i)/10.0 for i in range(10)] #+ [.92, .94, .96, .98, .99]
+
+    scores = pd.DataFrame(index=x, columns=[p[0] for p in pairs])
+    stdevs = pd.DataFrame(index=x, columns=[p[0] for p in pairs])
+
     for i, shape in pairs:
         subsets = generate_subsets(df, -1, subset_size)
-        x, y, yerr = get_perturbation(df, subsets)
+        y, yerr = get_perturbation(df, labels, x, subsets)
+        scores[i] = y
+        stdevs[i] = yerr
         plt.errorbar(x, y, yerr=yerr)
+
+    with open('perturbation-ss-means.csv', 'w') as f:
+        scores.to_csv(f)
+    with open('perturbation-ss-errs.csv', 'w') as f:
+        stdevs.to_csv(f)
 
     plt.axis([0.0, 1.0, 0.5, 1.0])
     plt.xlabel('perturbation')
@@ -295,18 +328,124 @@ def plot_perturbation_of_subset_size():
     plt.show()
 
 
-def plot_binning_of_datasets(df):
+def plot_perturbation_of_datasets():
+    """
+    Plot performance of a few different datasets by perturbation
+    """
+    files = [
+        ('edx/3091x_f12/features-wk10-ld4-b10.csv', 'dropout', 'r', '3091x'),
+        ('edx/6002x_f12/features-wk10-ld4-b10.csv', 'dropout', 'b', '6002x'),
+        ('baboon_mating/features-b10.csv', 'consort', 'g', 'baboon-mating'),
+        #('gender/free-sample-b10.csv', 'class', 'k', 'gender'),
+    ]
+    x = [0.9 + float(i)/50 for i in range(5)]
+    scores = pd.DataFrame(index=x, columns=[f[-1] for f in files])
+    stdevs = pd.DataFrame(index=x, columns=[f[-1] for f in files])
+
+    baboon_subsets = []
+    with open('baboon_mating/subsets.txt') as f:
+        for l in f:
+            baboon_subsets.append([c.strip() for c in l.split(',')])
+
+    for f, label, shape, name in files:
+        df = pd.read_csv(f)
+        labels = df[label].values
+        del df[label]
+        subsets = generate_subsets(df, -1, args.subset_size)
+        if name == 'baboon-mating':
+            subsets = baboon_subsets
+
+        print
+        print 'Testing perturbations on dataset', name
+        print
+
+        y, yerr = get_perturbation(df, labels, x, subsets)
+        scores[name] = y
+        stdevs[name] = yerr
+        plt.errorbar(x, y, yerr=yerr, fmt=shape)
+
+    with open('pert-auc-means.csv', 'w') as f:
+        scores.to_csv(f)
+    with open('pert-auc-errs.csv', 'w') as f:
+        stdevs.to_csv(f)
+
+    plt.axis([0.0, 1.0, 0.5, 1.0])
+    plt.xlabel('perturbation')
+    plt.ylabel('roc_auc')
+    plt.title('AUC vs. Perturbation, with Standard Deviation Error')
+    plt.show()
+
+def plot_binning_of_datasets():
     """
     Plot performance of a few different datasets across a number of bin sizes
     """
-    pass
+    files = [
+        ('edx/3091x_f12/features-wk10-ld4%s.csv', 'dropout', 'r', '3091x'),
+        ('edx/6002x_f12/features-wk10-ld4%s.csv', 'dropout', 'b', '6002x'),
+        ('baboon_mating/features%s.csv', 'consort', 'g', 'baboon-mating'),
+        ('gender/free-sample%s.csv', 'class', 'k', 'gender'),
+    ]
+    x = [0, 20, 10, 5]
+    scores = pd.DataFrame(index=x, columns=[f[-1] for f in files])
+    stdevs = pd.DataFrame(index=x, columns=[f[-1] for f in files])
+
+    baboon_subsets = []
+    with open('baboon_mating/subsets.txt') as f:
+        for l in f:
+            baboon_subsets.append([c.strip() for c in l.split(',')])
+
+    for f, label, shape, name in files:
+        subsets = None
+        if name == 'baboon-mating':
+            subsets = baboon_subsets
+
+        print
+        print 'Testing different bin sizes on dataset', name
+        print
+
+        y = []
+        yerr = []
+        for bin_size in x:
+            extra = '-b%d' % bin_size if bin_size else ''
+            df = pd.read_csv(f % extra)
+            labels = df[label].values
+            del df[label]
+
+            print 'loaded dataset', f % extra
+
+            if not subsets:
+                subsets = generate_subsets(df, -1, args.subset_size)
+
+            clf, res = test_classifier(classifier=SubsetForest, frame=df,
+                                       y=labels, perturb=0,
+                                       n_folds=args.num_folds, df=df,
+                                       labels=labels, subsets=subsets)
+            y.append(res.mean())
+            yerr.append(res.std())
+
+            scores.set_value(bin_size, name, res.mean())
+            stdevs.set_value(bin_size, name, res.std())
+
+        plt.errorbar(x, y, yerr=yerr, fmt=shape)
+
+    with open('binsize-auc-means.csv', 'w') as f:
+        scores.to_csv(f)
+    with open('binsize-auc-errs.csv', 'w') as f:
+        stdevs.to_csv(f)
+
+    plt.axis([-2, 22, 0.5, 1.0])
+    plt.xlabel('subset size')
+    plt.ylabel('roc_auc')
+    plt.title('AUC vs. Subset Size, with Standard Deviation Error')
+    plt.show()
 
 
 def main():
-    df = pd.read_csv(open(args.data_file))
-    compare_classifiers(df)
+    #df = pd.read_csv(open(args.data_file))
+    #compare_classifiers(df)
     #plot_subset_size_of_datasets()
-    #plot_perturbations(df)
+    plot_perturbation_of_datasets()
+    #plot_binning_of_datasets()
 
 
 if __name__ == '__main__':
