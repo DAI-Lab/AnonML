@@ -102,19 +102,18 @@ class SubspaceForest(ForestClassifier):
         if self.verbose:
             print "\ttesting subset trees..."
 
-        # train each subset on a the same set of folds
+        # make n folds of the data for training
         folds = KFold(y.shape[0], n_folds=self.n_folds, shuffle=True)
         for i, (train_index, test_index) in enumerate(folds):
             if self.verbose:
                 print "\t\tfold %d/%d" % (i+1, self.n_folds)
 
-            # make n folds of the data for training
+            # train each subset on a the same set of folds
             X_train, X_test = X[train_index], X[test_index]
             y_train, y_test = y[train_index], y[test_index]
 
+            # generate a tree for each subset, and test it for each fold
             for ss in self.subsets:
-
-                # generate a tree for each fold, and save the best one
                 X_test_sub = X_test[:, ss]
                 X_train_sub = X_train[:, ss]
 
@@ -161,20 +160,22 @@ class SubspaceForest(ForestClassifier):
     def predict_proba(self, X):
         return self.predict_proba_simple(X)
 
-    def print_scores(self):
-        for ss, score in sorted(self.scores.items(),
-                                key=lambda i: -i[1][self.tree_metric])[:3]:
-            print "subset %s: f1 = %.3f; roc_auc = %.3f; acc = %.3f" % \
-                (ss, score['f1'], score['roc_auc'], score['accuracy'])
-
-            for pair in zip(ss, self.cols[ss]):
-                print '\t%s: %s' % pair
-
-            #tree_to_code(self.trees[ss], self.cols[ss])
+    def predict_proba_vote(self, X):
+        """
+        Take the average of the prob_a's of all trees, weighted by
+        """
+        proba = np.zeros((len(X), 2))
+        for subset, tree in self.trees.items():
+            for i, p in enumerate(tree.predict(X[:,subset])):
+                # classes are [False, True]
+                vote = self.scores[subset][self.tree_metric]
+                prob = [0., vote] if p else [vote, 0.]
+                proba[i, :] += prob
+        return proba
 
     def predict_proba_simple(self, X):
         """
-        Take the average of the prob_a's of all trees
+        Take the average of the prob_a's of all trees, weighted by
         """
         proba = np.zeros((len(X), 2))
         for subset, tree in self.trees.items():
@@ -209,3 +210,14 @@ class SubspaceForest(ForestClassifier):
             proba[i, :] = [0., 1.] if l > rhs else [1., 0.]
 
         return proba
+
+    def print_scores(self):
+        for ss, score in sorted(self.scores.items(),
+                                key=lambda i: -i[1][self.tree_metric])[:3]:
+            print "subset %s: f1 = %.3f; roc_auc = %.3f; acc = %.3f" % \
+                (ss, score['f1'], score['roc_auc'], score['accuracy'])
+
+            for pair in zip(ss, self.cols[ss]):
+                print '\t%s: %s' % pair
+
+            #tree_to_code(self.trees[ss], self.cols[ss])
