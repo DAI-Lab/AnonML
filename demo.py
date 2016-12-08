@@ -6,6 +6,7 @@ import argparse
 import pdb
 import random
 import itertools
+import multiprocessing as mp
 
 from sklearn import tree as sktree
 from sklearn.tree import DecisionTreeClassifier
@@ -50,7 +51,7 @@ ap.add_argument('--num-folds', type=int, default=5,
 
 
 ###############################################################################
-##  Misc helper functions  #########################################################
+##  Misc helper functions  ####################################################
 ###############################################################################
 
 def perturb_dataframe(df, perturbation, subsets=None):
@@ -96,8 +97,48 @@ def generate_subsets(df, n_subsets, subset_size):
 
 
 ###############################################################################
-##  Test helper functions  #########################################################
+##  Test helper functions  ####################################################
 ###############################################################################
+
+def test_classifier_parallel(clf, X_pert, X, y, train_idx, test_idx, metrics):
+    """
+    Test a classifier on a single test/train fold, and store the results in the
+    "results" dict. Operates in parallel.
+    """
+    # divide the data into train and test sets
+    X_train, X_test = X_pert[train_idx], X[test_idx]
+    y_train, y_test = y[train_idx], y[test_idx]
+
+    # fit to the training set
+    clf.fit(X_train, y_train)
+
+    # see what the model predicts for the test set
+    y_pred = clf.predict(X_test)
+    tp, tn = sum(y_pred & y_test), sum(~y_pred & ~y_test)
+    fp, fn = sum(y_pred & ~y_test), sum(~y_pred & y_test)
+
+    if args.verbose >= 2:
+        print
+        print '\tPredicted/actual true:', sum(y_pred), sum(y_test)
+        print '\tPredicted/actual false:', sum(~y_pred), sum(~y_test)
+        print '\tTrue positive (rate): %d, %.3f' % (tp, float(tp) /
+                                                    sum(y_test))
+        print '\tTrue negative (rate): %d, %.3f' % (tn, float(tn) /
+                                                    sum(~y_test))
+        print '\tFalse positive (rate): %d, %.3f' % (fp, float(fp) /
+                                                     sum(~y_test))
+        print '\tFalse negative (rate): %d, %.3f' % (fn, float(fn) /
+                                                     sum(y_test))
+
+    # score the superclassifier
+    # TODO: score per-trial, not per-fold
+    results = {}
+    for metric in metrics:
+        scorer = check_scoring(clf, scoring=metric)
+        results[metric] = scorer(clf, X_test, y_test)
+
+    return results
+
 
 def test_classifier(classifier, frame, y, perturb=0, n_trials=1, n_folds=5, **kwargs):
     """
@@ -107,58 +148,38 @@ def test_classifier(classifier, frame, y, perturb=0, n_trials=1, n_folds=5, **kw
     X = np.nan_to_num(frame.as_matrix())
     y = np.array(y).astype('bool')
     clf = classifier(**kwargs)
-    auc_results = []
-    f1_results = []
-    acc_results = []
+    results = {metric: [] for metric in ['roc_auc', 'f1', 'accuracy']}
+    pool = mp.Pool(processes=4)
 
     for i in range(n_trials):
+        # perturb the data if necessary
+        if perturb:
+            pframe = perturb_dataframe(frame, perturb,
+                                       subsets=kwargs.get('subsets'))
+            X_pert = np.nan_to_num(pframe.as_matrix())
+        else:
+            X_pert = X
+
+        # generate n_folds partitions of the data
         folds = KFold(y.shape[0], n_folds=n_folds, shuffle=True)
+        res = []
         for train_index, test_index in folds:
-            # perturb the data if necessary
-            if perturb:
-                pframe = perturb_dataframe(frame, perturb,
-                                           subsets=kwargs.get('subsets'))
-                X_pert = np.nan_to_num(pframe.as_matrix())
-            else:
-                X_pert = X
+            # do parallel thing
+            mp_args = (clf, X_pert, X, y, train_index, test_index, results)
+            res.append(pool.apply_async(test_classifier_parallel, mp_args))
 
-            # make 3 folds of the data for training
-            X_train, X_test = X_pert[train_index], X[test_index]
-            y_train, y_test = y[train_index], y[test_index]
+        for r in res:
+            result = r.get()
+            for met, val in result.items():
+                results[met].append(val)
 
-            clf.fit(X_train, y_train)
+        pool.close()
+        pool.join()
 
-            y_pred = clf.predict(X_test)
-            tp, tn = sum(y_pred & y_test), sum(~y_pred & ~y_test)
-            fp, fn = sum(y_pred & ~y_test), sum(~y_pred & y_test)
 
-            if args.verbose >= 2:
-                print
-                print '\tPredicted/actual true:', sum(y_pred), sum(y_test)
-                print '\tPredicted/actual false:', sum(~y_pred), sum(~y_test)
-                print '\tTrue positive (rate): %d, %.3f' % (tp, float(tp) /
-                                                            sum(y_test))
-                print '\tTrue negative (rate): %d, %.3f' % (tn, float(tn) /
-                                                            sum(~y_test))
-                print '\tFalse positive (rate): %d, %.3f' % (fp, float(fp) /
-                                                             sum(~y_test))
-                print '\tFalse negative (rate): %d, %.3f' % (fn, float(fn) /
-                                                             sum(y_test))
-
-            # score the superclassifier
-            # TODO: score per-trial, not per-fold
-            scorer = check_scoring(clf, scoring='roc_auc')
-            auc_results.append(scorer(clf, X_test, y_test))
-
-            scorer = check_scoring(clf, scoring='f1')
-            f1_results.append(scorer(clf, X_test, y_test))
-
-            scorer = check_scoring(clf, scoring='accuracy')
-            acc_results.append(scorer(clf, X_test, y_test))
-
-    np_f1 = np.array(f1_results)
-    np_auc = np.array(auc_results)
-    np_acc = np.array(acc_results)
+    np_f1 = np.array(results['f1'])
+    np_auc = np.array(results['roc_auc'])
+    np_acc = np.array(results['accuracy'])
     if args.verbose >= 1:
         print
         print 'Results (%s, %d trials):' % (classifier.__name__, n_trials)
@@ -173,18 +194,26 @@ def test_classifier(classifier, frame, y, perturb=0, n_trials=1, n_folds=5, **kw
 
 
 def test_subset_forest(df, labels, perturb=0, n_trials=1, n_folds=5,
-                       num_subsets=-1, subset_size=3, subsets=None):
+                       num_subsets=-1, subset_size=3, subsets=None,
+                       parallel=False):
     subsets = subsets or generate_subsets(df, num_subsets, subset_size)
     results = {met: np.ndarray(0) for met in ['f1', 'auc', 'acc']}
     classifiers = []
 
+    # Test the classifier on each of n_trials different random feature subsets.
+    # This function exists because test_classifier does not have the ability to
+    # generate a fresh set of subsets between trials.
     for i in range(n_trials):
         clf, res = test_classifier(classifier=SubspaceForest, frame=df,
                                    y=labels, n_folds=n_folds,
                                    perturb=perturb, df=df,
                                    labels=labels, subsets=subsets)
+
+        # save results in the dictionary, by metric.
         for met, arr in res.items():
             results[met] = np.append(results[met], arr)
+
+        # at the end, we'll sort classifiers by AUC score.
         classifiers.append((res['auc'].mean(), clf))
         subsets = generate_subsets(df, num_subsets, subset_size)
 
@@ -311,8 +340,8 @@ def plot_subset_size_datasets():
     ]
     biggest_subset = 6
     x = range(1, biggest_subset + 1)
-    scores = pd.DataFrame(index=x, columns=[f[0] + '-mean' for f in files] +
-                                           [f[0] + '-std' for f in files])
+    scores = pd.DataFrame(index=x, columns=[f[-1] + '-mean' for f in files] +
+                                           [f[-1] + '-std' for f in files])
 
     for f, label, fmt, name in files:
         df = pd.read_csv(f)
@@ -361,7 +390,7 @@ def plot_perturbation_subset_size():
 
     biggest_subset = 5
     pairs = zip(range(1, biggest_subset + 1), ['r', 'b', 'g', 'y', 'k'])
-    x = [float(i)/10.0 for i in range(10)] + [.95, .98, 1.0]
+    x = [float(i)/10 for i in range(10)] + [.95, .98, 1.0]
 
     scores = pd.DataFrame(index=x, columns=[str(p[0]) + '-mean' for p in pairs] +
                                            [str(p[0]) + '-std' for p in pairs])
@@ -390,7 +419,9 @@ def plot_perturbation_subset_size():
                                          y=labels, perturb=pert,
                                          n_folds=n_folds, df=df,
                                          labels=labels, subsets=subsets)
-                results.ix[i*n_folds:i*n_folds+n_folds-1, pert] = res['auc']
+                start = i * n_folds
+                end = (i + 1) * n_folds - 1
+                results.ix[start:end, pert] = res['auc']
                 print '\t\tp = %.2f: %.3f (+- %.3f)' % (pert, res['auc'].mean(),
                                                         res['auc'].std())
 
@@ -428,10 +459,12 @@ def plot_perturbation_datasets():
         ('edx/3091x_f12/features-wk10-ld4-b10.csv', 'dropout', 'r', '3091x'),
         ('edx/6002x_f12/features-wk10-ld4-b10.csv', 'dropout', 'b', '6002x'),
     ]
-    x = [float(i)/10 for i in range(10)] + [.92, .94, .96, .98, 1.0]
+    x = [float(i)/10 for i in range(10)] + [.95, .98, 1.0]
     scores = pd.DataFrame(index=x, columns=[f[-1] + '-mean' for f in files] +
                                            [f[-1] + '-std' for f in files])
-    #best_subsets = {f[-1]: (0,) for f in files}
+
+    n_trials = args.num_trials
+    n_folds = args.num_folds
 
     for f, label, fmt, name in files:
         print
@@ -440,22 +473,24 @@ def plot_perturbation_datasets():
         labels = df[label].values
         del df[label]
 
-        results = pd.DataFrame(np.zeros((args.num_folds * args.num_trials,
+        results = pd.DataFrame(np.zeros((n_folds * n_trials,
                                          len(x))), columns=x)
 
         # try each perturbation level with several different subspaces, but keep
         # those subspaces consistent
-        for i in range(args.num_trials):
+        for i in range(n_trials):
             print '\ttesting subspace permutation %d/%d on %s, %d trials each' % \
-                (i+1, args.num_trials, name, args.num_folds)
+                (i+1, n_trials, name, n_folds)
             subsets = generate_subsets(df, -1, args.subset_size)
 
             for pert in x:
                 _, res = test_classifier(classifier=SubspaceForest, frame=df,
                                          y=labels, perturb=pert,
-                                         n_folds=args.num_folds, df=df,
+                                         n_folds=n_folds, df=df,
                                          labels=labels, subsets=subsets)
-                results.ix[i*3:i*3+2, pert] = res['auc']
+                start = i * n_folds
+                end = (i + 1) * n_folds - 1
+                results.ix[start:end, pert] = res['auc']
                 print '\t\tp = %.2f: %.3f (+- %.3f)' % (pert, res['auc'].mean(),
                                                         res['auc'].std())
 
@@ -516,6 +551,8 @@ def plot_binning_datasets():
         yerr = []
         for bin_size in x:
             extra = '-b%d' % bin_size if bin_size else ''
+
+            # load in the data frame for the binned features
             df = pd.read_csv(f % extra)
             labels = df[label].values
             del df[label]

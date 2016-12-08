@@ -57,32 +57,6 @@ class SubspaceForest(ForestClassifier):
                 self.subsets.append(subset)
                 self.cols[subset] = ss
 
-    def _test_fold_multithread(self, X_test, X_train, y_test, y_train, ss):
-        # generate a tree for each fold, and save the best one
-        X_test_sub = X_test[:, ss]
-        X_train_sub = X_train[:, ss]
-
-        # create new decision tree classifier
-        tree = sktree.DecisionTreeClassifier(class_weight='balanced')
-        tree.fit(X_train_sub, y_train)
-
-        # save some metrics about it
-        scores = {}
-        y_pred = tree.predict(X_test_sub)
-        scores['fp'] = float(sum(y_pred & ~y_test)) / sum(~y_test)
-        scores['fn'] = float(sum(~y_pred & y_test)) / sum(y_test)
-
-        for met in score_funcs:
-            scorer = check_scoring(tree, scoring=met)
-            scores[met] = scorer(tree, X_test_sub, y_test)
-
-        # One metric determines whether this is the best version of
-        # the tree
-        for k in scores:
-            self.scores[ss][k] += float(scores[k]) / self.n_folds
-
-        self.classes_ = tree.classes_
-
     def fit(self, X, y):
         if self.verbose:
             print
