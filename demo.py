@@ -26,12 +26,15 @@ ap = argparse.ArgumentParser()
 ap.add_argument('tests', type=str, nargs='+', choices=TEST_TYPES,
                 help='name of test to run')
 ap.add_argument('--data-file', type=str, help='path to the raw data file')
+ap.add_argument('--out-file', type=str, help='path to the output csv file')
 ap.add_argument('--plot', action='store_true',
                 help='whether to plot the results of the test')
 ap.add_argument('--label', type=str, default='dropout',
                 help='label we are trying to predict')
+ap.add_argument('--verbose', type=int, default=0,
+                help='how much output to display')
 ap.add_argument('--perturbation', type=float, default=0,
-                help="probability of perturbation")
+                help='probability of perturbation')
 ap.add_argument('--subsets', type=str, default=None,
                 help='hard-coded subset file')
 ap.add_argument('--num-subsets', type=int, default=-1,
@@ -96,8 +99,7 @@ def generate_subsets(df, n_subsets, subset_size):
 ##  Test helper functions  #########################################################
 ###############################################################################
 
-def test_classifier(classifier, frame, y, perturb=0, n_folds=5,
-                    verbose=1, **kwargs):
+def test_classifier(classifier, frame, y, perturb=0, n_trials=1, n_folds=5, **kwargs):
     """
     Run the given classifier with the given perturbation for n_folds tests, and
     return the results.
@@ -109,54 +111,57 @@ def test_classifier(classifier, frame, y, perturb=0, n_folds=5,
     f1_results = []
     acc_results = []
 
-    folds = KFold(y.shape[0], n_folds=n_folds, shuffle=True)
-    for train_index, test_index in folds:
-        # perturb the data if necessary
-        if perturb:
-            pframe = perturb_dataframe(frame, perturb,
-                                       subsets=kwargs.get('subsets'))
-            X_pert = np.nan_to_num(pframe.as_matrix())
-        else:
-            X_pert = X
+    for i in range(n_trials):
+        folds = KFold(y.shape[0], n_folds=n_folds, shuffle=True)
+        for train_index, test_index in folds:
+            # perturb the data if necessary
+            if perturb:
+                pframe = perturb_dataframe(frame, perturb,
+                                           subsets=kwargs.get('subsets'))
+                X_pert = np.nan_to_num(pframe.as_matrix())
+            else:
+                X_pert = X
 
-        # make 3 folds of the data for training
-        X_train, X_test = X_pert[train_index], X[test_index]
-        y_train, y_test = y[train_index], y[test_index]
+            # make 3 folds of the data for training
+            X_train, X_test = X_pert[train_index], X[test_index]
+            y_train, y_test = y[train_index], y[test_index]
 
-        clf.fit(X_train, y_train)
+            clf.fit(X_train, y_train)
 
-        y_pred = clf.predict(X_test)
-        tp, tn = sum(y_pred & y_test), sum(~y_pred & ~y_test)
-        fp, fn = sum(y_pred & ~y_test), sum(~y_pred & y_test)
+            y_pred = clf.predict(X_test)
+            tp, tn = sum(y_pred & y_test), sum(~y_pred & ~y_test)
+            fp, fn = sum(y_pred & ~y_test), sum(~y_pred & y_test)
 
-        if verbose >= 2:
-            print
-            print '\tPredicted/actual true:', sum(y_pred), sum(y_test)
-            print '\tPredicted/actual false:', sum(~y_pred), sum(~y_test)
-            print '\tTrue positive (rate): %d, %.3f' % (tp, float(tp) /
-                                                        sum(y_test))
-            print '\tTrue negative (rate): %d, %.3f' % (tn, float(tn) /
-                                                        sum(~y_test))
-            print '\tFalse positive (rate): %d, %.3f' % (fp, float(fp) /
-                                                         sum(~y_test))
-            print '\tFalse negative (rate): %d, %.3f' % (fn, float(fn) /
-                                                         sum(y_test))
+            if args.verbose >= 2:
+                print
+                print '\tPredicted/actual true:', sum(y_pred), sum(y_test)
+                print '\tPredicted/actual false:', sum(~y_pred), sum(~y_test)
+                print '\tTrue positive (rate): %d, %.3f' % (tp, float(tp) /
+                                                            sum(y_test))
+                print '\tTrue negative (rate): %d, %.3f' % (tn, float(tn) /
+                                                            sum(~y_test))
+                print '\tFalse positive (rate): %d, %.3f' % (fp, float(fp) /
+                                                             sum(~y_test))
+                print '\tFalse negative (rate): %d, %.3f' % (fn, float(fn) /
+                                                             sum(y_test))
 
-        # score the superclassifier
-        scorer = check_scoring(clf, scoring='roc_auc')
-        auc_results.append(scorer(clf, X_test, y_test))
+            # score the superclassifier
+            # TODO: score per-trial, not per-fold
+            scorer = check_scoring(clf, scoring='roc_auc')
+            auc_results.append(scorer(clf, X_test, y_test))
 
-        scorer = check_scoring(clf, scoring='f1')
-        f1_results.append(scorer(clf, X_test, y_test))
+            scorer = check_scoring(clf, scoring='f1')
+            f1_results.append(scorer(clf, X_test, y_test))
 
-        scorer = check_scoring(clf, scoring='accuracy')
-        acc_results.append(scorer(clf, X_test, y_test))
+            scorer = check_scoring(clf, scoring='accuracy')
+            acc_results.append(scorer(clf, X_test, y_test))
 
     np_f1 = np.array(f1_results)
     np_auc = np.array(auc_results)
     np_acc = np.array(acc_results)
-    if verbose >= 1:
-        print 'Results (%s, %d trials):' % (classifier.__name__, n_folds)
+    if args.verbose >= 1:
+        print
+        print 'Results (%s, %d trials):' % (classifier.__name__, n_trials)
         print '\tf1: mean = %f, std = %f, (%.3f, %.3f)' % \
             (np_f1.mean(), np_f1.std(), np_f1.min(), np_f1.max())
         print '\tAUC: mean = %f, std = %f, (%.3f, %.3f)' % \
@@ -168,7 +173,7 @@ def test_classifier(classifier, frame, y, perturb=0, n_folds=5,
 
 
 def test_subset_forest(df, labels, perturb=0, n_trials=1, n_folds=5,
-                       num_subsets=-1, subset_size=3, subsets=None, verbose=0):
+                       num_subsets=-1, subset_size=3, subsets=None):
     subsets = subsets or generate_subsets(df, num_subsets, subset_size)
     results = {met: np.ndarray(0) for met in ['f1', 'auc', 'acc']}
     classifiers = []
@@ -179,7 +184,7 @@ def test_subset_forest(df, labels, perturb=0, n_trials=1, n_folds=5,
                                    perturb=perturb, df=df,
                                    labels=labels, subsets=subsets)
         for met, arr in res.items():
-            np.append(results[met], arr)
+            results[met] = np.append(results[met], arr)
         classifiers.append((res['auc'].mean(), clf))
         subsets = generate_subsets(df, num_subsets, subset_size)
 
@@ -233,8 +238,6 @@ def compare_classifiers():
         columns.append(met + '-mean')
         columns.append(met + '-std')
 
-    total_folds = args.num_folds * args.num_trials
-
     classifiers = ['random-forest', 'gradient-boost', 'adaboost',
                    'subspace-forest']
     scores = pd.DataFrame(index=classifiers, columns=columns)
@@ -247,7 +250,6 @@ def compare_classifiers():
                                    num_subsets=args.num_subsets,
                                    subset_size=args.subset_size,
                                    subsets=subsets)
-
     for met, arr in res.items():
         scores.set_value('subspace-forest', met + '-mean', arr.mean())
         scores.set_value('subspace-forest', met + '-std', arr.std())
@@ -261,60 +263,58 @@ def compare_classifiers():
         for ss, cols in best_clf.cols.iteritems():
             f.write(','.join(cols) + '\n')
 
-    # test a Random Forest classifier, the gold standard.
+    # Random Forest
     _, res = test_classifier(classifier=RandomForestClassifier, frame=df,
-                             y=labels, n_folds=total_folds,
-                             class_weight='balanced')
-
+                             y=labels, n_trials=args.num_trials,
+                             n_folds=args.num_folds, class_weight='balanced')
     for met, arr in res.items():
         scores.set_value('random-forest', met + '-mean', arr.mean())
         scores.set_value('random-forest', met + '-std', arr.std())
 
     # Adaboost
     _, res = test_classifier(classifier=AdaBoostClassifier, frame=df, y=labels,
-                             n_folds=total_folds)
-
+                             n_trials=args.num_trials, n_folds=args.num_folds)
     for met, arr in res.items():
         scores.set_value('adaboost', met + '-mean', arr.mean())
         scores.set_value('adaboost', met + '-std', arr.std())
 
     # gradient boosting
     _, res = test_classifier(classifier=GradientBoostingClassifier, frame=df,
-                             y=labels, n_folds=total_folds)
-
+                             y=labels, n_trials=args.num_trials,
+                             n_folds=args.num_folds)
     for met, arr in res.items():
         scores.set_value('gradient-boost', met + '-mean', arr.mean())
         scores.set_value('gradient-boost', met + '-std', arr.std())
 
     # test BaggingClassifier: very similar to our classifier; uses random
     # subsets of features to build decision trees
-    _, res = test_classifier(classifier=BaggingClassifier, frame=df, y=labels,
-                             n_folds=total_folds,
-                             #max_features=args.subset_size,
-                             base_estimator=sktree.DecisionTreeClassifier(
-                                 class_weight='balanced'))
+    #_, res = test_classifier(classifier=BaggingClassifier, frame=df, y=labels,
+                             #n_trials=args.num_trials, n_folds=args.num_folds,
+                             ##max_features=args.subset_size,
+                             #base_estimator=sktree.DecisionTreeClassifier(
+                                 #class_weight='balanced'))
 
-    with open('classifier-comparison.csv', 'w') as f:
+    with open(args.out_file, 'w') as f:
         scores.to_csv(f)
 
 
-def plot_subset_size_datasets(n_folds):
+def plot_subset_size_datasets():
     """
     Plot performance of a few different datasets across a number of different
     subset sizes
     """
     files = [
-        ('edx/3091x_f12/features-wk10-ld4-bin.csv', 'dropout', 'r'),
-        ('edx/6002x_f12/features-wk10-ld4.csv', 'dropout', 'b'),
-        ('edx/201x_sp13/features-wk10-ld4.csv', 'dropout', 'g'),
-        ('baboon_mating/raw-features.csv', 'consort', 'k'),
+        ('baboon_mating/features-b10.csv', 'consort', 'g', 'baboon-mating'),
+        ('gender/free-sample-b10.csv', 'class', 'k', 'gender'),
+        ('edx/3091x_f12/features-wk10-ld4-b10.csv', 'dropout', 'r', '3091x'),
+        ('edx/6002x_f12/features-wk10-ld4-b10.csv', 'dropout', 'b', '6002x'),
     ]
     biggest_subset = 6
     x = range(1, biggest_subset + 1)
     scores = pd.DataFrame(index=x, columns=[f[0] + '-mean' for f in files] +
                                            [f[0] + '-std' for f in files])
 
-    for f, label, fmt in files:
+    for f, label, fmt, name in files:
         df = pd.read_csv(f)
         labels = df[label].values
         del df[label]
@@ -326,19 +326,19 @@ def plot_subset_size_datasets(n_folds):
         y = []
         yerr = []
         for subset_size in x:
-            subsets = generate_subsets(df, -1, subset_size)
-
-            _, res = test_subset_forest(df=df, labels=labels, subsets=subsets,
-                                        perturb=0, n_trials=args.num_trials,
+            _, res = test_subset_forest(df=df, labels=labels,
+                                        subset_size=subset_size, perturb=0,
+                                        n_trials=args.num_trials,
                                         n_folds=args.num_folds)
 
             mean = res['auc'].mean()
             std = res['auc'].std()
             y.append(mean)
             yerr.append(std)
+            print '\tsubset size %d: %.3f +- %.3f' % (subset_size, mean, std)
 
-            scores.set_value(subset_size, f + '-mean', mean)
-            scores.set_value(subset_size, f + '-std', std)
+            scores.set_value(subset_size, name + '-mean', mean)
+            scores.set_value(subset_size, name + '-std', std)
 
         if args.plot:
             plt.errorbar(x, y, yerr=yerr, fmt=fmt)
@@ -370,23 +370,27 @@ def plot_perturbation_subset_size():
     print 'Testing performance on perturbed data with different subspace sizes'
     print
 
+    n_trials = args.num_trials
+    n_folds = args.num_folds
+
     for subset_size, fmt in pairs:
         print 'Testing perturbation for subset size', subset_size
-        results = pd.DataFrame(np.zeros((args.num_folds * 3, len(x))), columns=x)
+        results = pd.DataFrame(np.zeros((n_folds * n_trials,
+                                         len(x))), columns=x)
 
         # try each perturbation level with several different subspaces, but keep
         # those subspaces consistent
-        for i in range(args.num_folds):
-            print '\ttesting subspace permutation %d/%d, %d trials each' % \
-                (i+1, args.num_folds, 3)
+        for i in range(n_trials):
+            print '\ttesting subspace permutation %d/%d, %d folds each' % \
+                (i+1, n_trials, n_folds)
             subsets = generate_subsets(df, -1, subset_size)
 
             for pert in x:
                 _, res = test_classifier(classifier=SubspaceForest, frame=df,
                                          y=labels, perturb=pert,
-                                         n_folds=3, df=df,
+                                         n_folds=n_folds, df=df,
                                          labels=labels, subsets=subsets)
-                results.ix[i*3:i*3+2, pert] = res['auc']
+                results.ix[i*n_folds:i*n_folds+n_folds-1, pert] = res['auc']
                 print '\t\tp = %.2f: %.3f (+- %.3f)' % (pert, res['auc'].mean(),
                                                         res['auc'].std())
 
@@ -394,15 +398,16 @@ def plot_perturbation_subset_size():
         for p in x:
             mean = results[p].as_matrix().mean()
             std = results[p].as_matrix().std()
-            scores.ix[p, '%d-mean' % i] = mean
-            scores.ix[p, '%d-std' % i] = std
+            scores.ix[p, '%d-mean' % subset_size] = mean
+            scores.ix[p, '%d-std' % subset_size] = std
             print '\tp = %.3f: %.3f (+- %.3f)' % (p, mean, std)
 
         if args.plot:
-            plt.errorbar(x, scores['%d-mean' % i], yerr=scores['%d-std' % i],
+            plt.errorbar(x, scores['%d-mean' % subset_size],
+                         yerr=scores['%d-std' % subset_size],
                          fmt=fmt)
 
-    with open('pert-by-subset-size.csv', 'w') as f:
+    with open(args.out_file, 'w') as f:
         scores.to_csv(f)
 
     if args.plot:
@@ -435,19 +440,20 @@ def plot_perturbation_datasets():
         labels = df[label].values
         del df[label]
 
-        results = pd.DataFrame(np.zeros((args.num_folds * 3, len(x))), columns=x)
+        results = pd.DataFrame(np.zeros((args.num_folds * args.num_trials,
+                                         len(x))), columns=x)
 
         # try each perturbation level with several different subspaces, but keep
         # those subspaces consistent
-        for i in range(args.num_folds):
+        for i in range(args.num_trials):
             print '\ttesting subspace permutation %d/%d on %s, %d trials each' % \
-                (i+1, args.num_folds, name, 3)
+                (i+1, args.num_trials, name, args.num_folds)
             subsets = generate_subsets(df, -1, args.subset_size)
 
             for pert in x:
                 _, res = test_classifier(classifier=SubspaceForest, frame=df,
                                          y=labels, perturb=pert,
-                                         n_folds=3, df=df,
+                                         n_folds=args.num_folds, df=df,
                                          labels=labels, subsets=subsets)
                 results.ix[i*3:i*3+2, pert] = res['auc']
                 print '\t\tp = %.2f: %.3f (+- %.3f)' % (pert, res['auc'].mean(),
