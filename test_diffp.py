@@ -49,28 +49,29 @@ def get_delta_range(m, n, p, real):
     # here, we're gonna find delta for a given p and real value
     y1 = {0: perturb_prob(m, n, p, real, 0)}
     y2 = {0: perturb_prob(m, n, p, real + 1, 0)}
-    epsilon = y1[0] / y2[0] # actually ln of this but w/e
+    epsilon = get_epsilon(m, p) # actually ln of this but w/e
 
     for i in xrange(n):
         y1[i] = perturb_prob(m, n, p, real, i)
         y2[i] = perturb_prob(m, n, p, real + 1, i)
         ratio = max(y1[i], y2[i]) / min(y1[i], y2[i])
-        if ratio > epsilon:
+        if ratio > epsilon and i > 0:
             break
 
     delta_low = 1.0 - sum(y2.values())
     delta_high = delta_low + y2[i]
-    return y1, y2, (delta_low, delta_high)
+    return y1, y2, i, (delta_low, delta_high)
 
 
-def plot_real_vals(m, n, p, epsilon):
-    # here we establish that 0 always yields the worst delta value
-    real_vals = range(20)
-    fig, ax = plt.subplots(1, 1)
+def plot_real_vals(m, n, p, real_vals=None):
+    real_vals = real_vals or range(20)
+    # here we establish what real value yields the worst delta value
     deltas = []
+    indexes = []
 
     for real in real_vals:
-        y1, y2, delta = get_delta_range(m, n, p, real)
+        y1, y2, idx, delta = get_delta_range(m, n, p, real)
+        indexes.append(idx)
         deltas.append(delta)
 
         print real, delta
@@ -78,27 +79,30 @@ def plot_real_vals(m, n, p, epsilon):
         # plot probability of each output value given the input value
         y1p = [j[1] for j in sorted(y1.items(), key=lambda k: k[0])]
         X = sorted(y1.keys())
-        ax.plot(X, y1p)
+        #plt.plot(X, y1p)
 
-    plt.show()
+    #plt.show()
 
-    fig, ax = plt.subplots(1, 1)
     delta_low = [d[0] for d in deltas]
     delta_high = [d[1] for d in deltas]
-    ax.plot(real_vals, delta_low)
-    ax.plot(real_vals, delta_high)
-    plt.show()
+    #plt.plot(real_vals, delta_low)
+    #plt.plot(real_vals, delta_high)
+    #plt.show()
+    plt.plot(real_vals, indexes)
+    #plt.show()
+
+    return delta_low, delta_high
 
 
-def plot_m_vs_n(m, p, epsilon):
+def plot_m_vs_n(m, p):
     # now we test the effect of n/m on delta (also strictly decreasing)
     fig, ax = plt.subplots(1, 1)
     deltas = []
-    all_factors = range(1, 10)
+    all_factors = [i * 0.2 for i in range(5, 50)]
 
     for f in all_factors:
-        n = f * m
-        y1, y2, delta = get_delta_range(m, n, p, 0)
+        n = int(f * m)
+        y1, y2, idx, delta = get_delta_range(m, n, p, 0)
         deltas.append(delta)
 
         print n, m, delta
@@ -118,7 +122,7 @@ def plot_m_vs_n(m, p, epsilon):
     plt.show()
 
 
-def plot_mn(p, epsilon):
+def plot_mn(p):
     # ...and the effect of m, if n remains a constant multiple (logarithmically
     # increasing?)
     fig, ax = plt.subplots(1, 1)
@@ -147,6 +151,11 @@ def plot_mn(p, epsilon):
     plt.show()
 
 
+def get_epsilon(m, p):
+    # epsilon bound we're going to achieve
+    return (1.0 - (1.0 - p) / m) / (1.0 - p - (1.0 - p) / m)
+
+
 if __name__ == '__main__':
     args = ap.parse_args()
 
@@ -155,16 +164,13 @@ if __name__ == '__main__':
     m = args.m
     n = args.n
 
-    # epsilon bound we're going to achieve
-    epsilon = (1.0 - (1.0 - p) / m) / (1.0 - p - (1.0 - p) / m)
-
     # run our experiments
     if args.plot_real:
-        plot_real_vals(m, n, p, epsilon)
+        plot_real_vals(m, n, p )
     if args.plot_mvn:
-        plot_m_vs_n(m, p, epsilon)
+        plot_m_vs_n(m, p)
     if args.plot_m:
-        plot_mn(p, epsilon)
+        plot_mn(p)
 
 
 # Note: It seems like, given perturbation factor p, we can achieve
