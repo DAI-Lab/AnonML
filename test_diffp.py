@@ -5,6 +5,7 @@ import scipy as sp
 import matplotlib.pyplot as plt
 from scipy.special import factorial, comb
 from scipy.stats import binom
+from scipy.optimize import curve_fit
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--m', type=int, default=2000,
@@ -45,111 +46,163 @@ def perturb_prob(m, n, p, real, k):
     return mass
 
 
-def get_delta_range(m, n, p, real):
+def get_delta_from_range(m, n, p, real, epsilon=None):
     # here, we're gonna find delta for a given p and real value
     y1 = {0: perturb_prob(m, n, p, real, 0)}
     y2 = {0: perturb_prob(m, n, p, real + 1, 0)}
-    epsilon = get_epsilon(m, p) # actually ln of this but w/e
+    epsilon = epsilon or get_epsilon(m, p) # actually ln of this but w/e
+    delta = 0
 
     for i in xrange(n):
         y1[i] = perturb_prob(m, n, p, real, i)
         y2[i] = perturb_prob(m, n, p, real + 1, i)
-        ratio = max(y1[i], y2[i]) / min(y1[i], y2[i])
+        bigger = max(y1[i], y2[i])
+        smaller = min(y1[i], y2[i])
+        ratio = bigger / smaller
         if ratio > epsilon and i > 0:
+            delta = max(delta, bigger - smaller * epsilon)
             break
 
-    delta_low = 1.0 - sum(y2.values())
-    delta_high = delta_low + y2[i]
-    return y1, y2, i, (delta_low, delta_high)
+    return y1, y2, delta
 
 
 def plot_real_vals(m, n, p, real_vals=None):
     real_vals = real_vals or range(20)
     # here we establish what real value yields the worst delta value
     deltas = []
-    indexes = []
 
     for real in real_vals:
-        y1, y2, idx, delta = get_delta_range(m, n, p, real)
-        indexes.append(idx)
+        y1, y2, delta = get_delta_from_range(m, n, p, real)
         deltas.append(delta)
 
-        print real, delta
+        print 'real = %d, delta = %.4g' % (real, delta)
 
         # plot probability of each output value given the input value
-        y1p = [j[1] for j in sorted(y1.items(), key=lambda k: k[0])]
         X = sorted(y1.keys())
-        #plt.plot(X, y1p)
+        y1p = [j[1] for j in sorted(y1.items(), key=lambda k: k[0])]
+        plt.plot(X, y1p)
 
-    #plt.show()
+    plt.show()
+    plt.plot(real_vals, deltas)
+    plt.show()
 
-    delta_low = [d[0] for d in deltas]
-    delta_high = [d[1] for d in deltas]
-    #plt.plot(real_vals, delta_low)
-    #plt.plot(real_vals, delta_high)
-    #plt.show()
-    plt.plot(real_vals, indexes)
-    #plt.show()
-
-    return delta_low, delta_high
+    return deltas
 
 
 def plot_m_vs_n(m, p):
     # now we test the effect of n/m on delta (also strictly decreasing)
-    fig, ax = plt.subplots(1, 1)
     deltas = []
-    all_factors = [i * 0.2 for i in range(5, 50)]
+    all_factors = [i * 0.2 for i in range(5, 200)]
 
     for f in all_factors:
         n = int(f * m)
-        y1, y2, idx, delta = get_delta_range(m, n, p, 0)
+        delta = 0
+        for i in range(10):
+            y1, y2, d = get_delta_from_range(m, n, p, real=i)
+            if d > delta:
+                delta = d
+            else:
+                break
+
         deltas.append(delta)
 
-        print n, m, delta
+        print 'm = %d, n = %d, real = %d, delta = %.4g' % (m, n, i-1, delta)
 
         # plot probability of each output value given the input value
-        y1p = [j[1] for j in sorted(y1.items(), key=lambda k: k[0])]
         X = sorted(y1.keys())
-        ax.plot(X, y1p)
+        y1p = [j[1] for j in sorted(y1.items(), key=lambda k: k[0])]
+        plt.plot(X, y1p)
 
     plt.show()
 
+    X = np.array(all_factors)
+    y = np.log(np.array(deltas))
+    popt, pcov = curve_fit(quad, X, y)
+    func = lambda x, a, b, c: np.exp(a * x**2 + b * x + c)
+    fit_y = func(X, *popt)
+
+    print 'delta = exp(%.3g * (m/n)**2 + %.3g * m/n + %.3g)' % tuple(popt)
+
     fig, ax = plt.subplots(1, 1)
-    delta_low = [d[0] for d in deltas]
-    delta_high = [d[1] for d in deltas]
-    ax.plot(all_factors, delta_low)
-    ax.plot(all_factors, delta_high)
+    ax.set_yscale('log')
+    ax.plot(X, deltas)
+    ax.plot(X, fit_y)
     plt.show()
 
 
-def plot_mn(p):
-    # ...and the effect of m, if n remains a constant multiple (logarithmically
-    # increasing?)
-    fig, ax = plt.subplots(1, 1)
+def plot_mn(p, mult=5):
+    # ...and the effect of n, if m remains a constant multiple (exponentially increasing)
     deltas = []
-    all_m = [100, 200, 500, 1000, 5000, 10000, 25000]
+    all_m = [100, 200, 400, 800, 1600, 3200, 6400, 12800, 25600]
 
     for m in all_m:
-        n = m * 5
-        y1, y2, delta = get_delta_range(m, n, p, 0)
+        n = m * mult
+        delta = 0
+        for i in range(5):
+            y1, y2, d = get_delta_from_range(m, n, p, real=i)
+            if d > delta:
+                delta = d
+            else:
+                break
+
         deltas.append(delta)
 
-        print n, m, delta
+        print 'm = %d, n = %d, delta = %.4g' % (m, n, delta)
 
         # plot probability of each output value given the input value
-        y1p = [j[1] for j in sorted(y1.items(), key=lambda k: k[0])]
         X = sorted(y1.keys())
-        ax.plot(X, y1p)
+        y1p = [j[1] for j in sorted(y1.items(), key=lambda k: k[0])]
+        plt.plot(X, y1p)
 
     plt.show()
 
     fig, ax = plt.subplots(1, 1)
-    delta_low = [d[0] for d in deltas]
-    delta_high = [d[1] for d in deltas]
-    ax.plot(all_m, delta_low)
-    ax.plot(all_m, delta_high)
+    ax.set_xscale('log')
+    ax.plot(all_m, deltas)
     plt.show()
 
+
+def plot_delta_v_epsilon(p, m=2000, mult=5):
+    # plot delta vs. epsilon for fixed m, n, p
+    n = m * mult
+    deltas = []
+    epsilons = [get_epsilon(m, p) * (1 + i * 0.01) for i in range(100)]
+
+    for eps in epsilons:
+        delta = 0
+        for i in range(5):
+            y1, y2, d = get_delta_from_range(m, n, p, real=i, epsilon=eps)
+            if d > delta:
+                delta = d
+            else:
+                break
+
+        deltas.append(delta)
+
+        print 'm = %d, n = %d, epsilon = %.3f, delta = %.4g' % (m, n, eps, delta)
+
+    X = np.array(epsilons)
+    y = np.log(np.array(deltas))
+    popt, pcov = curve_fit(lin, X, y)
+    func = lambda x, a, b: np.exp(a * x + b)
+    fit_y = func(X, *popt)
+
+    print 'y = exp(%.3g * epsilon + %.3g)' % tuple(popt)
+
+    fig, ax = plt.subplots(1, 1)
+    ax.set_yscale('log')
+    ax.plot(X, deltas)
+    ax.plot(X, fit_y)
+    plt.show()
+
+def lin(x, a, b):
+    return a * x + b
+
+def quad(x, a, b, c):
+    return a * x**2 + b * x + c
+
+def exp(x, a, b, c):
+    return a * np.exp(-b * x) + c
 
 def get_epsilon(m, p):
     # epsilon bound we're going to achieve
