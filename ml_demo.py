@@ -7,6 +7,7 @@ import pdb
 import random
 import itertools
 import multiprocessing as mp
+from operator import mul
 
 from sklearn import tree as sktree
 from sklearn.tree import DecisionTreeClassifier
@@ -54,17 +55,102 @@ ap.add_argument('--num-folds', type=int, default=5,
 ##  Misc helper functions  ####################################################
 ###############################################################################
 
+def perturb_histograms(X, y, p_keep, p_change, bin_size, subsets=None):
+    """
+    Perturb each subset separately, and allow duplicating rows.
+    For each row in the dataframe, for each subset of that row, randomly perturb
+    all the values of that subset. Subsets must be non-overlapping.
+
+    Input: dataframe of real data
+    Output: set of dataframes, one for each subset
+    """
+    if subsets is None:
+        # default to one set per variable
+        subsets = [(i,) for i in range(X.shape[1])]
+
+    X_slices = {s: X[np.array(s)] for s in subsets}
+    output = {}
+
+    # get the number of possible tuples for a subset
+    hsize = lambda subset: 2 * bin_size ** len(subset)
+
+    # convert a tuple to an index into the histogram
+    def hist_idx(subset, row):
+        res = 0
+        for i, v in enumerate(X[row][np.array(subset)]):
+            res += bin_size ** i * v
+        return res * 2 + y[row]
+
+    # convert the histogram index back into a tuple
+    def idx_to_tuple(idx, degree):
+        my_tup = []
+        y = idx % 2
+        idx /= 2
+        for _ in range(degree):
+            my_tup.append(idx % bin_size)
+            idx /= bin_size
+        return my_tup, y
+
+    # iterate over subsets on the outside
+    for subset in subsets:
+        size = hsize(subset)
+        # create a blank histogram
+        histogram = np.zeros(size)
+
+        # random response for each row
+        for row in xrange(X.shape[0]):
+            # draw a random set of tuples to return
+            myhist = np.random.binomial(1, p_change, size)
+
+            # calculate the index of our tuple in the list
+            idx = hist_idx(subset, row)
+
+            # draw one random value for the tuple we actually have
+            myhist[idx] = np.random.binomial(1, p_keep)
+            histogram += myhist
+
+        # renormalize the histogram
+        pmat = np.ones((size, size)) * p_change
+        pmat += np.identity(size) * (p_keep - p_change)
+        ipmat = np.linalg.inv(pmat)
+        histogram = np.dot(ipmat, histogram)
+
+        # convert the histogram into a list of rows
+        pert_tuples = []
+        labels = []
+        for i, num in enumerate(histogram):
+            tup, label = idx_to_tuple(i, len(subset))
+            num = int(round(num))
+            pert_tuples += num * [tup]
+            labels += num * [label]
+
+        # aand back into a matrix
+        out_X = pd.DataFrame(pert_tuples, columns=subset).as_matrix()
+        out_y = np.array(labels)
+        output[subset] = out_X, out_y
+
+    return output
+
+
 def perturb_dataframe(df, perturbation, subsets=None):
     """
+    Perturb a whole dataframe at once. Consistency.
     For each row in the dataframe, for each subset of that row, randomly perturb
-    all the values of that subset.
+    all the values of that subset. Subsets must be non-overlapping.
+
+    Input: dataframe of real data
+    Output: dataframe of perturbed data
     """
     if subsets is None:
         subsets = [[i] for i in df.columns]
 
     ndf = df.copy()
+    index = df.index.to_series()
     for cols in subsets:
-        ix = df.index.to_series().sample(frac=perturbation)
+        # grab a random sample of indices to perturb
+        ix = index.sample(frac=perturbation)
+
+        # perturb the value in each column
         for col in cols:
             ndf.ix[ix, col] = np.random.choice(df[col], size=len(ix))
 
@@ -74,6 +160,7 @@ def perturb_dataframe(df, perturbation, subsets=None):
 def generate_subsets(df, n_subsets, subset_size):
     """
     Generate n_subsets random, non-overlapping subsets of subset_size columns each
+    Subsets are lists of column names (strings)
     """
     shuf_cols = list(df.columns)
     random.shuffle(shuf_cols)
@@ -100,17 +187,13 @@ def generate_subsets(df, n_subsets, subset_size):
 ##  Test helper functions  ####################################################
 ###############################################################################
 
-def test_classifier_parallel(clf, X_pert, X, y, train_idx, test_idx, metrics):
+def test_classifier_parallel(clf, training_data, X_test, y_test, metrics):
     """
     Test a classifier on a single test/train fold, and store the results in the
     "results" dict. Operates in parallel.
     """
-    # divide the data into train and test sets
-    X_train, X_test = X_pert[train_idx], X[test_idx]
-    y_train, y_test = y[train_idx], y[test_idx]
-
     # fit to the training set
-    clf.fit(X_train, y_train)
+    clf.fit(training_data)
 
     # see what the model predicts for the test set
     y_pred = clf.predict(X_test)
@@ -140,34 +223,49 @@ def test_classifier_parallel(clf, X_pert, X, y, train_idx, test_idx, metrics):
     return results
 
 
-def test_classifier(classifier, frame, y, perturb=0, n_trials=1, n_folds=5, **kwargs):
+def test_classifier(classifier, df, y, subsets=None, perturb=0, n_trials=1,
+                    n_folds=5, **kwargs):
     """
     Run the given classifier with the given perturbation for n_folds tests, and
     return the results.
     """
-    X = np.nan_to_num(frame.as_matrix())
+    X = np.nan_to_num(df.as_matrix())
     y = np.array(y).astype('bool')
     clf = classifier(**kwargs)
     results = {metric: [] for metric in ['roc_auc', 'f1', 'accuracy']}
+    # subsets: map column names to indices
+    subsets_ix = []
+    if subsets:
+        for subset in subsets:
+            subsets_ix.append(tuple([df.columns.get_loc(c) for c in subset]))
+    else:
+        subsets_ix = [(i,) for i in xrange(X.shape[1])]
+
     pool = mp.Pool(processes=4)
 
     for i in range(n_trials):
-        # perturb the data if necessary
-        if perturb:
-            pframe = perturb_dataframe(frame, perturb,
-                                       subsets=kwargs.get('subsets'))
-            X_pert = np.nan_to_num(pframe.as_matrix())
-        else:
-            X_pert = X
-
         # generate n_folds partitions of the data
         folds = KFold(y.shape[0], n_folds=n_folds, shuffle=True)
         res = []
-        for train_index, test_index in folds:
+        for train_idx, test_idx in folds:
+            # split up data
+            X_train, X_test = X[train_idx], X[test_idx]
+            y_train, y_test = y[train_idx], y[test_idx]
+
+            # perturb into histograms
+            training_data = perturb_histograms(X=X_train, y=y_train,
+                                               p_keep=perturb,
+                                               p_change=1-perturb,
+                                               bin_size=max(X_train[0])+1,
+                                               subsets=subsets_ix)
+
             # do parallel thing
-            mp_args = (clf, X_pert, X, y, train_index, test_index, results)
+            # watch out this copies a lot of data between processes
+            mp_args = (clf, training_data, X_test, y_test, results)
             res.append(pool.apply_async(test_classifier_parallel, mp_args))
 
+        # collect all the threads
+        # there's probably a better way to do this
         for r in res:
             result = r.get()
             for met, val in result.items():
@@ -204,10 +302,9 @@ def test_subset_forest(df, labels, perturb=0, n_trials=1, n_folds=5,
     # This function exists because test_classifier does not have the ability to
     # generate a fresh set of subsets between trials.
     for i in range(n_trials):
-        clf, res = test_classifier(classifier=SubspaceForest, frame=df,
-                                   y=labels, n_folds=n_folds,
-                                   perturb=perturb, df=df,
-                                   labels=labels, subsets=subsets)
+        clf, res = test_classifier(classifier=SubspaceForest, df=df,
+                                   y=labels, subsets=subsets, perturb=perturb,
+                                   n_folds=n_folds)
 
         # save results in the dictionary, by metric.
         for met, arr in res.items():
@@ -229,10 +326,9 @@ def test_perturbation(df, labels, x, subsets, n_folds):
     yerr = []
 
     for pert in x:
-        clf, res = test_classifier(classifier=SubspaceForest, frame=df,
-                                   y=labels, perturb=pert,
-                                   n_folds=n_folds, df=df,
-                                   labels=labels, subsets=subsets)
+        clf, res = test_classifier(classifier=SubspaceForest, df=df,
+                                   y=labels, subsets=subsets, perturb=pert,
+                                   n_folds=n_folds)
 
         mean = res['auc'].mean()
         std = res['auc'].std()
@@ -292,23 +388,23 @@ def compare_classifiers():
         for ss, cols in best_clf.cols.iteritems():
             f.write(','.join(cols) + '\n')
 
-    # Random Forest
-    _, res = test_classifier(classifier=RandomForestClassifier, frame=df,
+    # random forest
+    _, res = test_classifier(classifier=RandomForestClassifier, df=df,
                              y=labels, n_trials=args.num_trials,
                              n_folds=args.num_folds, class_weight='balanced')
     for met, arr in res.items():
         scores.set_value('random-forest', met + '-mean', arr.mean())
         scores.set_value('random-forest', met + '-std', arr.std())
 
-    # Adaboost
-    _, res = test_classifier(classifier=AdaBoostClassifier, frame=df, y=labels,
+    # ADAboost
+    _, res = test_classifier(classifier=AdaBoostClassifier, df=df, y=labels,
                              n_trials=args.num_trials, n_folds=args.num_folds)
     for met, arr in res.items():
         scores.set_value('adaboost', met + '-mean', arr.mean())
         scores.set_value('adaboost', met + '-std', arr.std())
 
     # gradient boosting
-    _, res = test_classifier(classifier=GradientBoostingClassifier, frame=df,
+    _, res = test_classifier(classifier=GradientBoostingClassifier, df=df,
                              y=labels, n_trials=args.num_trials,
                              n_folds=args.num_folds)
     for met, arr in res.items():
@@ -317,7 +413,7 @@ def compare_classifiers():
 
     # test BaggingClassifier: very similar to our classifier; uses random
     # subsets of features to build decision trees
-    #_, res = test_classifier(classifier=BaggingClassifier, frame=df, y=labels,
+    #_, res = test_classifier(classifier=BaggingClassifier, df=df, y=labels,
                              #n_trials=args.num_trials, n_folds=args.num_folds,
                              ##max_features=args.subset_size,
                              #base_estimator=sktree.DecisionTreeClassifier(
@@ -415,10 +511,9 @@ def plot_perturbation_subset_size():
             subsets = generate_subsets(df, -1, subset_size)
 
             for pert in x:
-                _, res = test_classifier(classifier=SubspaceForest, frame=df,
-                                         y=labels, perturb=pert,
-                                         n_folds=n_folds, df=df,
-                                         labels=labels, subsets=subsets)
+                _, res = test_classifier(classifier=SubspaceForest, df=df,
+                                         y=labels, subsets=subsets,
+                                         perturb=pert, n_folds=n_folds)
                 start = i * n_folds
                 end = (i + 1) * n_folds - 1
                 results.ix[start:end, pert] = res['auc']
@@ -484,10 +579,9 @@ def plot_perturbation_datasets():
             subsets = generate_subsets(df, -1, args.subset_size)
 
             for pert in x:
-                _, res = test_classifier(classifier=SubspaceForest, frame=df,
-                                         y=labels, perturb=pert,
-                                         n_folds=n_folds, df=df,
-                                         labels=labels, subsets=subsets)
+                _, res = test_classifier(classifier=SubspaceForest, df=df,
+                                         y=labels, subsets=subsets,
+                                         perturb=pert, n_folds=n_folds)
                 start = i * n_folds
                 end = (i + 1) * n_folds - 1
                 results.ix[start:end, pert] = res['auc']

@@ -19,6 +19,10 @@ ap.add_argument('--plot-mvn', action='store_true',
                 help='plot delta vs the n/m ratio')
 ap.add_argument('--plot-m', action='store_true',
                 help='plot delta vs m with fixed n/m ratio')
+ap.add_argument('--plot-dve', action='store_true',
+                help='plot delta vs epsilon with fixed n/m ratio')
+ap.add_argument('--plot-evp', action='store_true',
+                help='plot epsilon vs delta with fixed m')
 
 def perturb_prob(m, n, p, real, k):
     """
@@ -126,7 +130,9 @@ def plot_m_vs_n(m, p):
     fig, ax = plt.subplots(1, 1)
     ax.set_yscale('log')
     ax.plot(X, deltas)
-    ax.plot(X, fit_y)
+    #ax.plot(X, fit_y)
+    plt.xlabel('N/K')
+    plt.ylabel('delta')
     plt.show()
 
 
@@ -162,11 +168,11 @@ def plot_mn(p, mult=5):
     plt.show()
 
 
-def plot_delta_v_epsilon(p, m=2000, mult=5):
+def plot_delta_vs_epsilon(p, m=2000, mult=5):
     # plot delta vs. epsilon for fixed m, n, p
     n = m * mult
     deltas = []
-    epsilons = [get_epsilon(m, p) * (1 + i * 0.01) for i in range(100)]
+    epsilons = [get_epsilon(m, p) * (1 + i * 0.05) for i in range(100)]
 
     for eps in epsilons:
         delta = 0
@@ -181,18 +187,29 @@ def plot_delta_v_epsilon(p, m=2000, mult=5):
 
         print 'm = %d, n = %d, epsilon = %.3f, delta = %.4g' % (m, n, eps, delta)
 
-    X = np.array(epsilons)
+    X = np.log(np.array(epsilons))
     y = np.log(np.array(deltas))
-    popt, pcov = curve_fit(lin, X, y)
-    func = lambda x, a, b: np.exp(a * x + b)
+    popt, pcov = curve_fit(quad, X, y)
+    func = lambda x, a, b, c: np.exp(a * x**2 + b * x + c)
     fit_y = func(X, *popt)
 
-    print 'y = exp(%.3g * epsilon + %.3g)' % tuple(popt)
+    #print 'y = exp(%.3g * epsilon + %.3g)' % tuple(popt)
 
     fig, ax = plt.subplots(1, 1)
     ax.set_yscale('log')
     ax.plot(X, deltas)
-    ax.plot(X, fit_y)
+    #ax.plot(X, fit_y)
+    plt.xlabel('epsilon')
+    plt.ylabel('delta')
+    plt.show()
+
+def plot_epsilon_vs_p(m=2000):
+    ps = [i * 0.1 for i in range(1, 10)]
+    ps += [0.9 + i * 0.02 for i in range(1, 6)]
+    eps = [np.log(get_epsilon(m, 1-p)) for p in ps]
+    plt.plot(ps, eps)
+    plt.xlabel('p')
+    plt.ylabel('epsilon')
     plt.show()
 
 def lin(x, a, b):
@@ -219,11 +236,15 @@ if __name__ == '__main__':
 
     # run our experiments
     if args.plot_real:
-        plot_real_vals(m, n, p )
+        plot_real_vals(m, n, p)
     if args.plot_mvn:
         plot_m_vs_n(m, p)
     if args.plot_m:
         plot_mn(p)
+    if args.plot_dve:
+        plot_delta_vs_epsilon(p)
+    if args.plot_evp:
+        plot_epsilon_vs_p()
 
 
 # Note: It seems like, given perturbation factor p, we can achieve

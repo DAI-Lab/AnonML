@@ -34,41 +34,36 @@ def tree_to_code(tree, feature_names):
 
 
 class SubspaceForest(ForestClassifier):
-    def __init__(self, df, labels, subsets=None, verbose=False,
-                 tree_metric='f1', n_folds=3):
-        """
-        df: dataframe of training data (no label column)
-        labels: series of boolean labels
-        subsets: list of lists of column names in the dataframe
-        """
-        self.labels = labels
-        self.subsets = subsets
+    def __init__(self, verbose=False, tree_metric='f1', n_folds=3):
         self._estimator_type = 'classifier'
         self.n_outputs_ = 1
-        self.subsets = []
         self.cols = {}
         self.verbose = verbose
         self.tree_metric = tree_metric
         self.n_folds = n_folds
 
-        for ss in subsets:
-            subset = tuple(df.columns.get_loc(col) for col in ss)
-            if subset not in self.subsets:
-                self.subsets.append(subset)
-                self.cols[subset] = ss
+    def fit(self, training_data):
+        """
+        training_data: dict mapping subsets to (X, y) matrix-array tuples
 
-    def fit(self, X, y):
+        For each subset of features, train and test a decision tree
+        """
         if self.verbose:
             print
-            print 'Fitting Subspace Forest with %d subsets to %s-matrix' %\
-                (len(self.subsets), str(X.shape))
+            print 'Fitting Subspace Forest with %d subsets' % len(training_data)
 
-        # for each subset of features, train & test a decision tree
-        self.trees = {}
+        # basically static variables
         score_funcs = ['accuracy', 'roc_auc', 'f1']
         metrics = score_funcs + ['fp', 'fn']
-        self.scores = {ss: {met: 0 for met in metrics} for ss in self.subsets}
 
+        # dictionary mapping a decision tree (identified by a feature subset) to
+        # its set of performance scores
+        self.scores = {subset: {met: 0 for met in metrics} for subset in training_data}
+
+        # decision trees keyed by subsets
+        self.trees = {}
+
+        # count stats about the returnlabels
         y = y.astype('bool')
         self.num_true = sum(y)
         self.num_false = sum(~y)
@@ -76,50 +71,47 @@ class SubspaceForest(ForestClassifier):
         if self.verbose:
             print "\ttesting subset trees..."
 
-        # make n folds of the data for training
-        folds = KFold(y.shape[0], n_folds=self.n_folds, shuffle=True)
-        for i, (train_index, test_index) in enumerate(folds):
-            if self.verbose:
-                print "\t\tfold %d/%d" % (i+1, self.n_folds)
+        # generate a tree for each subset, and test it on several folds of data
+        for subset, (X, y) in training_data.iteritems():
+            print "\ttree", subset
+            # make k folds of the data for training
+            folds = KFold(y.shape[0], n_folds=self.n_folds, shuffle=True)
 
-            # train each subset on a the same set of folds
-            X_train, X_test = X[train_index], X[test_index]
-            y_train, y_test = y[train_index], y[test_index]
+            for i, (train_index, test_index) in enumerate(folds):
+                if self.verbose:
+                    print "\t\tfold %d/%d" % (i+1, self.n_folds)
 
-            # generate a tree for each subset, and test it for each fold
-            for ss in self.subsets:
-                X_test_sub = X_test[:, ss]
-                X_train_sub = X_train[:, ss]
+                X_train, X_test = X[train_index], X[test_index]
+                y_train, y_test = y[train_index], y[test_index]
 
                 # create new decision tree classifier
                 tree = sktree.DecisionTreeClassifier(class_weight='balanced')
-                tree.fit(X_train_sub, y_train)
+                tree.fit(X_train, y_train)
 
-                # save some metrics about it
+                # calculate some metrics about it
                 scores = {}
-                y_pred = tree.predict(X_test_sub)
+                y_pred = tree.predict(X_test)
                 scores['fp'] = float(sum(y_pred & ~y_test)) / sum(~y_test)
                 scores['fn'] = float(sum(~y_pred & y_test)) / sum(y_test)
 
-                # store them for lookup later
+                # use all the scoring functions
                 for met in score_funcs:
                     scorer = check_scoring(tree, scoring=met)
-                    scores[met] = scorer(tree, X_test_sub, y_test)
+                    scores[met] = scorer(tree, X_test, y_test)
 
-                # One metric determines whether this is the best version of
-                # the tree
+                # save average metrics for each tree
                 for k in scores:
-                    self.scores[ss][k] += float(scores[k]) / self.n_folds
+                    self.scores[subset][k] += float(scores[k]) / self.n_folds
 
 
         if self.verbose:
             print "\ttraining subset trees"
-        for i, ss in enumerate(self.subsets):
+
+        for subset, (X, y) in training_data.iteritems():
             # train classifier on whole dataset
-            X_sub = X[:, ss]
             tree = sktree.DecisionTreeClassifier(class_weight='balanced')
-            tree.fit(X_sub, y)
-            self.trees[ss] = tree
+            tree.fit(X, y)
+            self.trees[subset] = tree
             self.classes_ = tree.classes_
 
         self.estimators_ = self.trees.values()
@@ -127,9 +119,6 @@ class SubspaceForest(ForestClassifier):
         if self.verbose:
             print "Fit complete."
             print
-
-        #if self.verbose:
-            #self.print_scores()
 
     def predict_proba(self, X):
         return self.predict_proba_simple(X)
