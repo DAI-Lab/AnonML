@@ -34,10 +34,10 @@ def tree_to_code(tree, feature_names):
 
 
 class SubspaceForest(ForestClassifier):
-    def __init__(self, verbose=False, tree_metric='f1', n_folds=3):
+    def __init__(self, verbose=False, tree_metric='f1', n_folds=3, cols=None):
         self._estimator_type = 'classifier'
         self.n_outputs_ = 1
-        self.cols = {}
+        self.cols = cols
         self.verbose = verbose
         self.tree_metric = tree_metric
         self.n_folds = n_folds
@@ -63,17 +63,23 @@ class SubspaceForest(ForestClassifier):
         # decision trees keyed by subsets
         self.trees = {}
 
-        # count stats about the returnlabels
-        y = y.astype('bool')
-        self.num_true = sum(y)
-        self.num_false = sum(~y)
+        # stats
+        self.num_true = 0
+        self.num_false = 0
 
         if self.verbose:
             print "\ttesting subset trees..."
 
         # generate a tree for each subset, and test it on several folds of data
         for subset, (X, y) in training_data.iteritems():
-            print "\ttree", subset
+            if self.verbose:
+                print "\ttesting tree", subset
+
+            # count stats about the labels
+            y = y.astype('bool')
+            self.num_true += sum(y)
+            self.num_false += sum(~y)
+
             # make k folds of the data for training
             folds = KFold(y.shape[0], n_folds=self.n_folds, shuffle=True)
 
@@ -88,9 +94,11 @@ class SubspaceForest(ForestClassifier):
                 tree = sktree.DecisionTreeClassifier(class_weight='balanced')
                 tree.fit(X_train, y_train)
 
-                # calculate some metrics about it
+                # cross-validate this tree
                 scores = {}
                 y_pred = tree.predict(X_test)
+
+                # calculate false positive/false negative
                 scores['fp'] = float(sum(y_pred & ~y_test)) / sum(~y_test)
                 scores['fn'] = float(sum(~y_pred & y_test)) / sum(y_test)
 
@@ -102,7 +110,6 @@ class SubspaceForest(ForestClassifier):
                 # save average metrics for each tree
                 for k in scores:
                     self.scores[subset][k] += float(scores[k]) / self.n_folds
-
 
         if self.verbose:
             print "\ttraining subset trees"
@@ -138,7 +145,7 @@ class SubspaceForest(ForestClassifier):
 
     def predict_proba_simple(self, X):
         """
-        Take the average of the prob_a's of all trees, weighted by
+        Take the average of the prob_a's of all trees, weighted by <some metric>
         """
         proba = np.zeros((len(X), 2))
         for subset, tree in self.trees.items():
@@ -180,7 +187,8 @@ class SubspaceForest(ForestClassifier):
             print "subset %s: f1 = %.3f; roc_auc = %.3f; acc = %.3f" % \
                 (ss, score['f1'], score['roc_auc'], score['accuracy'])
 
-            for pair in zip(ss, self.cols[ss]):
-                print '\t%s: %s' % pair
+            if self.cols:
+                for pair in zip(ss, self.cols[ss]):
+                    print '\t%s: %s' % pair
 
             #tree_to_code(self.trees[ss], self.cols[ss])

@@ -22,7 +22,9 @@ from sklearn.metrics.scorer import check_scoring
 from subset_forest import SubspaceForest
 
 
-TEST_TYPES = ['compare-classifiers', 'subset-size-datasets', 'perturbation-subset-size', 'perturbation-datasets', 'binning-datasets']
+TEST_TYPES = ['compare-classifiers', 'subset-size-datasets',
+              'perturbation-subset-size', 'perturbation',
+              'perturbation-datasets', 'binning-datasets']
 
 ap = argparse.ArgumentParser()
 ap.add_argument('tests', type=str, nargs='+', choices=TEST_TYPES,
@@ -35,6 +37,10 @@ ap.add_argument('--label', type=str, default='dropout',
                 help='label we are trying to predict')
 ap.add_argument('--verbose', type=int, default=0,
                 help='how much output to display')
+ap.add_argument('--p-keep', type=float, default=0,
+                help='probability of sending a row that you have')
+ap.add_argument('--p-change', type=float, default=0,
+                help='probability of sending a row that you don\'t have')
 ap.add_argument('--perturbation', type=float, default=0,
                 help='probability of perturbation')
 ap.add_argument('--subsets', type=str, default=None,
@@ -68,7 +74,6 @@ def perturb_histograms(X, y, p_keep, p_change, bin_size, subsets=None):
         # default to one set per variable
         subsets = [(i,) for i in range(X.shape[1])]
 
-    X_slices = {s: X[np.array(s)] for s in subsets}
     output = {}
 
     # get the number of possible tuples for a subset
@@ -84,7 +89,7 @@ def perturb_histograms(X, y, p_keep, p_change, bin_size, subsets=None):
     # convert the histogram index back into a tuple
     def idx_to_tuple(idx, degree):
         my_tup = []
-        y = idx % 2
+        y = bool(idx % 2)
         idx /= 2
         for _ in range(degree):
             my_tup.append(idx % bin_size)
@@ -94,8 +99,11 @@ def perturb_histograms(X, y, p_keep, p_change, bin_size, subsets=None):
     # iterate over subsets on the outside
     for subset in subsets:
         size = hsize(subset)
-        # create a blank histogram
-        histogram = np.zeros(size)
+
+        # create two blank histograms: one for the real values, one for the
+        # perturbed values
+        old_hist = np.zeros(size)
+        pert_hist = np.zeros(size)
 
         # random response for each row
         for row in xrange(X.shape[0]):
@@ -105,24 +113,39 @@ def perturb_histograms(X, y, p_keep, p_change, bin_size, subsets=None):
             # calculate the index of our tuple in the list
             idx = hist_idx(subset, row)
 
+            # add to the "real" histogram
+            old_hist[idx] += 1
+
             # draw one random value for the tuple we actually have
             myhist[idx] = np.random.binomial(1, p_keep)
-            histogram += myhist
+            pert_hist += myhist
 
         # renormalize the histogram
         pmat = np.ones((size, size)) * p_change
         pmat += np.identity(size) * (p_keep - p_change)
         ipmat = np.linalg.inv(pmat)
-        histogram = np.dot(ipmat, histogram)
+        final_hist = np.dot(ipmat, pert_hist)
+
+        pert_tuples = []    # covariate rows
+        labels = []         # label data
 
         # convert the histogram into a list of rows
-        pert_tuples = []
-        labels = []
-        for i, num in enumerate(histogram):
+        for i, num in enumerate(final_hist):
+            # map histogram index back to tuple
             tup, label = idx_to_tuple(i, len(subset))
+
+            # round floats to ints, and add that many of the tuple
+            # TODO: look into linear programming/other solutions to this
             num = int(round(num))
             pert_tuples += num * [tup]
             labels += num * [label]
+
+        # calculate L1, L2 norm errors
+        l1_err = sum(abs(old_hist - final_hist))
+        l2_err = sum((old_hist - final_hist) ** 2)
+
+        #print "Total rows: old = %d, new = %d" % (sum(old_hist), sum(final_hist))
+        #print "L1 error = %d, L2 error = %d" % (l1_err, l2_err)
 
         # aand back into a matrix
         out_X = pd.DataFrame(pert_tuples, columns=subset).as_matrix()
@@ -224,7 +247,7 @@ def test_classifier_parallel(clf, training_data, X_test, y_test, metrics):
 
 
 def test_classifier(classifier, df, y, subsets=None, perturb=0, n_trials=1,
-                    n_folds=5, **kwargs):
+                    n_folds=5, parallel=False, **kwargs):
     """
     Run the given classifier with the given perturbation for n_folds tests, and
     return the results.
@@ -233,15 +256,9 @@ def test_classifier(classifier, df, y, subsets=None, perturb=0, n_trials=1,
     y = np.array(y).astype('bool')
     clf = classifier(**kwargs)
     results = {metric: [] for metric in ['roc_auc', 'f1', 'accuracy']}
-    # subsets: map column names to indices
-    subsets_ix = []
-    if subsets:
-        for subset in subsets:
-            subsets_ix.append(tuple([df.columns.get_loc(c) for c in subset]))
-    else:
-        subsets_ix = [(i,) for i in xrange(X.shape[1])]
 
-    pool = mp.Pool(processes=4)
+    if parallel:
+        pool = mp.Pool(processes=4)
 
     for i in range(n_trials):
         # generate n_folds partitions of the data
@@ -252,32 +269,46 @@ def test_classifier(classifier, df, y, subsets=None, perturb=0, n_trials=1,
             X_train, X_test = X[train_idx], X[test_idx]
             y_train, y_test = y[train_idx], y[test_idx]
 
+            # find the binning factor of this matrix
+            # TODO: should be a parameter, not discovered like this
+            bin_size = max([max(X[:,i]) - min(X[:,i]) for i in
+                            range(X.shape[1])]) + 1
+
             # perturb into histograms
             training_data = perturb_histograms(X=X_train, y=y_train,
-                                               p_keep=perturb,
-                                               p_change=1-perturb,
-                                               bin_size=max(X_train[0])+1,
-                                               subsets=subsets_ix)
+                                               p_keep=1-perturb,
+                                               p_change=perturb,
+                                               bin_size=bin_size,
+                                               subsets=subsets)
 
-            # do parallel thing
-            # watch out this copies a lot of data between processes
-            mp_args = (clf, training_data, X_test, y_test, results)
-            res.append(pool.apply_async(test_classifier_parallel, mp_args))
+            if parallel:
+                # do parallel thing
+                # watch out this copies a lot of data between processes
+                mp_args = (clf, training_data, X_test, y_test, results)
+                res.append(pool.apply_async(test_classifier_parallel, mp_args))
+            else:
+                # do serial thing
+                result = test_classifier_parallel(clf, training_data, X_test,
+                                                  y_test, results)
+                for met, val in result.items():
+                    results[met].append(val)
 
-        # collect all the threads
-        # there's probably a better way to do this
-        for r in res:
-            result = r.get()
-            for met, val in result.items():
-                results[met].append(val)
+        if parallel:
+            # collect all the threads
+            # there's probably a better way to do this
+            for r in res:
+                result = r.get()
+                for met, val in result.items():
+                    results[met].append(val)
 
-        pool.close()
-        pool.join()
+            pool.close()
+            pool.join()
 
-
+    # just making things numpy arrays so we can do stats easier
     np_f1 = np.array(results['f1'])
     np_auc = np.array(results['roc_auc'])
     np_acc = np.array(results['accuracy'])
+
     if args.verbose >= 1:
         print
         print 'Results (%s, %d trials):' % (classifier.__name__, n_trials)
@@ -295,6 +326,13 @@ def test_subset_forest(df, labels, perturb=0, n_trials=1, n_folds=5,
                        num_subsets=-1, subset_size=3, subsets=None,
                        parallel=False):
     subsets = subsets or generate_subsets(df, num_subsets, subset_size)
+    subsets_ix = []
+    cols = {}
+    # subsets: map column names to indices
+    for subset in subsets:
+        subsets_ix.append(tuple([df.columns.get_loc(c) for c in subset]))
+        cols[subsets_ix[-1]] = subset
+
     results = {met: np.ndarray(0) for met in ['f1', 'auc', 'acc']}
     classifiers = []
 
@@ -303,8 +341,8 @@ def test_subset_forest(df, labels, perturb=0, n_trials=1, n_folds=5,
     # generate a fresh set of subsets between trials.
     for i in range(n_trials):
         clf, res = test_classifier(classifier=SubspaceForest, df=df,
-                                   y=labels, subsets=subsets, perturb=perturb,
-                                   n_folds=n_folds)
+                                   y=labels, subsets=subsets_ix, perturb=perturb,
+                                   n_folds=n_folds, cols=cols)
 
         # save results in the dictionary, by metric.
         for met, arr in res.items():
@@ -319,8 +357,7 @@ def test_subset_forest(df, labels, perturb=0, n_trials=1, n_folds=5,
 
 def test_perturbation(df, labels, x, subsets, n_folds):
     """
-    Calculate the performance of a classifier for every perturbation level in
-    {0, 0.1, ..., 0.9}
+    Calculate the performance of a classifier for every perturbation level in x
     """
     y = []
     yerr = []
@@ -329,7 +366,6 @@ def test_perturbation(df, labels, x, subsets, n_folds):
         clf, res = test_classifier(classifier=SubspaceForest, df=df,
                                    y=labels, subsets=subsets, perturb=pert,
                                    n_folds=n_folds)
-
         mean = res['auc'].mean()
         std = res['auc'].std()
         y.append(mean)
@@ -508,12 +544,20 @@ def plot_perturbation_subset_size():
         for i in range(n_trials):
             print '\ttesting subspace permutation %d/%d, %d folds each' % \
                 (i+1, n_trials, n_folds)
+
             subsets = generate_subsets(df, -1, subset_size)
+            subsets_ix = []
+            cols = {}
+            # subsets: map column names to indices
+            for subset in subsets:
+                subsets_ix.append(tuple([df.columns.get_loc(c) for c in subset]))
+                cols[subsets_ix[-1]] = subset
 
             for pert in x:
                 _, res = test_classifier(classifier=SubspaceForest, df=df,
-                                         y=labels, subsets=subsets,
-                                         perturb=pert, n_folds=n_folds)
+                                         y=labels, subsets=subsets_ix,
+                                         perturb=pert, n_folds=n_folds,
+                                         cols=cols)
                 start = i * n_folds
                 end = (i + 1) * n_folds - 1
                 results.ix[start:end, pert] = res['auc']
@@ -549,10 +593,10 @@ def plot_perturbation_datasets():
     Plot performance of a few different datasets by perturbation
     """
     files = [
-        ('baboon_mating/features-b10.csv', 'consort', 'g', 'baboon-mating'),
-        ('gender/free-sample-b10.csv', 'class', 'k', 'gender'),
-        ('edx/3091x_f12/features-wk10-ld4-b10.csv', 'dropout', 'r', '3091x'),
-        ('edx/6002x_f12/features-wk10-ld4-b10.csv', 'dropout', 'b', '6002x'),
+        #('baboon_mating/features-b10.csv', 'consort', 'g', 'baboon-mating'),
+        #('gender/free-sample-b5.csv', 'class', 'k', 'gender'),
+        ('edx/3091x_f12/features-wk10-ld4-b5.csv', 'dropout', 'r', '3091x'),
+        ('edx/6002x_f12/features-wk10-ld4-b5.csv', 'dropout', 'b', '6002x'),
     ]
     x = [float(i)/10 for i in range(10)] + [.95, .98, 1.0]
     scores = pd.DataFrame(index=x, columns=[f[-1] + '-mean' for f in files] +
@@ -576,17 +620,28 @@ def plot_perturbation_datasets():
         for i in range(n_trials):
             print '\ttesting subspace permutation %d/%d on %s, %d trials each' % \
                 (i+1, n_trials, name, n_folds)
+
+            # generate new set of subsets
             subsets = generate_subsets(df, -1, args.subset_size)
+            subsets_ix = []
+            cols = {}
+
+            # map column names to indices
+            for subset in subsets:
+                subsets_ix.append(tuple([df.columns.get_loc(c) for c in subset]))
+                cols[subsets_ix[-1]] = subset
 
             for pert in x:
+                print '\tperturbation =', pert
                 _, res = test_classifier(classifier=SubspaceForest, df=df,
-                                         y=labels, subsets=subsets,
-                                         perturb=pert, n_folds=n_folds)
+                                         y=labels, subsets=subsets_ix,
+                                         perturb=pert, n_folds=n_folds,
+                                         cols=cols)
                 start = i * n_folds
                 end = (i + 1) * n_folds - 1
                 results.ix[start:end, pert] = res['auc']
-                print '\t\tp = %.2f: %.3f (+- %.3f)' % (pert, res['auc'].mean(),
-                                                        res['auc'].std())
+                print '\tp = %.2f: %.3f (+- %.3f)' % (pert, res['auc'].mean(),
+                                                      res['auc'].std())
 
 
         print '\t%s results:' % name
