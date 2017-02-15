@@ -79,8 +79,12 @@ def perturb_hist_pram(X, y, p_keep, p_change, bin_size, subsets=None):
 
     output = {}
 
-    if p_change:
-        print 'epsilon =', np.log(p_keep / p_change)
+    if args.verbose >= 2:
+        print
+        if p_change:
+            print 'epsilon =', np.log(p_keep / p_change)
+        else:
+            print 'no perturbation'
 
     # get the number of possible tuples for a subset
     hsize = lambda subset: 2 * bin_size ** len(subset)
@@ -150,8 +154,8 @@ def perturb_hist_pram(X, y, p_keep, p_change, bin_size, subsets=None):
         l1_err = sum(abs(old_hist - final_hist))
         l2_err = sum((old_hist - final_hist) ** 2)
 
-        print "Total rows: old = %d, new = %d" % (sum(old_hist), sum(final_hist))
-        print "L1 error = %d, L2 error = %d" % (l1_err, l2_err)
+        #print "Total rows: old = %d, new = %d" % (sum(old_hist), sum(final_hist))
+        #print "L1 error = %d, L2 error = %d" % (l1_err, l2_err)
 
         # aand back into a matrix
         out_X = pd.DataFrame(pert_tuples, columns=subset).as_matrix()
@@ -191,6 +195,11 @@ def perturb_hist_gauss(X, y, epsilon, delta, bin_size, subsets=None):
             res += bin_size ** i * v
         return res * 2 + y[row]
 
+    def hist_elt(subset, row):
+        arr = np.zeros(hsize(subset))
+        arr[hist_idx(subset, row)] += 1
+        return arr
+
     # convert the histogram index back into a tuple
     def idx_to_tuple(idx, degree):
         my_tup = []
@@ -207,16 +216,7 @@ def perturb_hist_gauss(X, y, epsilon, delta, bin_size, subsets=None):
 
         # create two blank histograms: one for the real values, one for the
         # perturbed values
-        old_hist = np.zeros(size)
-        pert_hist = np.zeros(size)
-
-        # random response for each row
-        for row in xrange(X.shape[0]):
-            # calculate the index of our tuple in the list
-            idx = hist_idx(subset, row)
-
-            # add to the real histogram
-            old_hist[idx] += 1
+        old_hist = sum(hist_elt(subset, row) for row in xrange(X.shape[0]))
 
         # add some random gaussian noise
         pert_hist = np.random.normal(0, sigma_sq, size) + old_hist
@@ -696,9 +696,9 @@ def plot_perturbation_datasets():
     """
     files = [
         #('baboon_mating/features-b10.csv', 'consort', 'g', 'baboon-mating'),
-        #('gender/free-sample-b5.csv', 'class', 'k', 'gender'),
-        ('edx/3091x_f12/features-wk10-ld4-b5.csv', 'dropout', 'r', '3091x'),
+        #('edx/3091x_f12/features-wk10-ld4-b5.csv', 'dropout', 'r', '3091x'),
         ('edx/6002x_f12/features-wk10-ld4-b5.csv', 'dropout', 'b', '6002x'),
+        ('gender/free-sample-b5.csv', 'class', 'k', 'gender'),
     ]
     x = [float(i)/20 for i in range(10)]
     scores = pd.DataFrame(index=x, columns=[f[-1] + '-mean' for f in files] +
@@ -710,6 +710,7 @@ def plot_perturbation_datasets():
     for f, label, fmt, name in files:
         print
         print 'Testing perturbations on dataset', repr(name)
+        print
         df = pd.read_csv(f)
         labels = df[label].values
         del df[label]
@@ -734,8 +735,9 @@ def plot_perturbation_datasets():
                 cols[subsets_ix[-1]] = subset
 
             for pert in x:
-                print
-                #print 'p_keep =', 1 - pert, 'p_change =', pert
+                if args.verbose >= 1:
+                    print
+                    print '\tp_keep =', 1 - pert, 'p_change =', pert
                 _, res = test_classifier(classifier=SubspaceForest, df=df,
                                          y=labels, subsets=subsets_ix,
                                          perturb=pert, n_folds=n_folds,
@@ -743,11 +745,12 @@ def plot_perturbation_datasets():
                 start = i * n_folds
                 end = (i + 1) * n_folds - 1
                 results.ix[start:end, pert] = res['auc']
-                print '\tp = %.2f: %.3f (+- %.3f)' % (pert, res['auc'].mean(),
-                                                      res['auc'].std())
+                if args.verbose >= 1:
+                    print '\tp = %.2f: %.3f (+- %.3f)' % (pert, res['auc'].mean(),
+                                                          res['auc'].std())
 
 
-        print '\t%s results:' % name
+        print '%s results:' % name
         # aggregate the scores for each trial
         for p in x:
             mean = results[p].as_matrix().mean()
