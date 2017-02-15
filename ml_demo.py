@@ -61,20 +61,26 @@ ap.add_argument('--num-folds', type=int, default=5,
 ##  Misc helper functions  ####################################################
 ###############################################################################
 
-def perturb_histograms(X, y, p_keep, p_change, bin_size, subsets=None):
+def perturb_hist_pram(X, y, p_keep, p_change, bin_size, subsets=None):
     """
-    Perturb each subset separately, and allow duplicating rows.
-    For each row in the dataframe, for each subset of that row, randomly perturb
-    all the values of that subset. Subsets must be non-overlapping.
+    Perturb each feature subspace separately.
+    Each peer sends a bit vector representing the presence or absence of each
+    possible feature value.
 
-    Input: dataframe of real data
-    Output: set of dataframes, one for each subset
+    X: matrix of real feature data (X[row, column])
+    y: array of real labels (y[row])
+    Output: dict mapping each subspace to a perturbed (X, y) pair
     """
+    assert p_keep > p_change
+
     if subsets is None:
         # default to one set per variable
         subsets = [(i,) for i in range(X.shape[1])]
 
     output = {}
+
+    if p_change:
+        print 'epsilon =', np.log(p_keep / p_change)
 
     # get the number of possible tuples for a subset
     hsize = lambda subset: 2 * bin_size ** len(subset)
@@ -144,7 +150,96 @@ def perturb_histograms(X, y, p_keep, p_change, bin_size, subsets=None):
         l1_err = sum(abs(old_hist - final_hist))
         l2_err = sum((old_hist - final_hist) ** 2)
 
-        #print "Total rows: old = %d, new = %d" % (sum(old_hist), sum(final_hist))
+        print "Total rows: old = %d, new = %d" % (sum(old_hist), sum(final_hist))
+        print "L1 error = %d, L2 error = %d" % (l1_err, l2_err)
+
+        # aand back into a matrix
+        out_X = pd.DataFrame(pert_tuples, columns=subset).as_matrix()
+        out_y = np.array(labels)
+        output[subset] = out_X, out_y
+
+    return output
+
+
+def perturb_hist_gauss(X, y, epsilon, delta, bin_size, subsets=None):
+    """
+    Perturb each feature subspace separately.
+    Each peer sends a float vector representing the amount of each possible
+    feature value.
+
+    X: matrix of real feature data (X[row, column])
+    y: array of real labels (y[row])
+    Output: dict mapping each subspace to a perturbed (X, y) pair
+    """
+    if subsets is None:
+        # default to one set per variable
+        subsets = [(i,) for i in range(X.shape[1])]
+
+    output = {}
+
+    print 'epsilon =', epsilon, 'delta =', delta,
+    sigma_sq = 2 * np.log(2 / delta) / (epsilon**2)
+    print 'R =', sigma_sq
+
+    # get the number of possible tuples for a subset
+    hsize = lambda subset: 2 * bin_size ** len(subset)
+
+    # convert a tuple to an index into the histogram
+    def hist_idx(subset, row):
+        res = 0
+        for i, v in enumerate(X[row][np.array(subset)]):
+            res += bin_size ** i * v
+        return res * 2 + y[row]
+
+    # convert the histogram index back into a tuple
+    def idx_to_tuple(idx, degree):
+        my_tup = []
+        y = bool(idx % 2)
+        idx /= 2
+        for _ in range(degree):
+            my_tup.append(idx % bin_size)
+            idx /= bin_size
+        return my_tup, y
+
+    # iterate over subsets on the outside
+    for subset in subsets:
+        size = hsize(subset)
+
+        # create two blank histograms: one for the real values, one for the
+        # perturbed values
+        old_hist = np.zeros(size)
+        pert_hist = np.zeros(size)
+
+        # random response for each row
+        for row in xrange(X.shape[0]):
+            # calculate the index of our tuple in the list
+            idx = hist_idx(subset, row)
+
+            # add to the real histogram
+            old_hist[idx] += 1
+
+        # add some random gaussian noise
+        pert_hist = np.random.normal(0, sigma_sq, size) + old_hist
+
+        pert_tuples = []    # covariate rows
+        labels = []         # label data
+
+        # convert the histogram into a list of rows
+        for i, num in enumerate(pert_hist):
+            # map histogram index back to tuple
+            tup, label = idx_to_tuple(i, len(subset))
+
+            # round floats to ints, and add that many of the tuple
+            # TODO: look into linear programming/other solutions to this
+            num = int(round(num))
+            pert_tuples += num * [tup]
+            labels += num * [label]
+
+        # calculate L1, L2 norm errors
+        l1_err = sum(abs(old_hist - pert_hist))
+        l2_err = sum((old_hist - pert_hist) ** 2)
+
+        #print "Total rows: old = %d, new = %d" % (sum(old_hist), sum(pert_hist))
         #print "L1 error = %d, L2 error = %d" % (l1_err, l2_err)
 
         # aand back into a matrix
@@ -274,12 +369,19 @@ def test_classifier(classifier, df, y, subsets=None, perturb=0, n_trials=1,
             bin_size = max([max(X[:,i]) - min(X[:,i]) for i in
                             range(X.shape[1])]) + 1
 
-            # perturb into histograms
-            training_data = perturb_histograms(X=X_train, y=y_train,
-                                               p_keep=1-perturb,
-                                               p_change=perturb,
-                                               bin_size=bin_size,
-                                               subsets=subsets)
+            # perturb data as a histogram
+            training_data = perturb_hist_pram(X=X_train, y=y_train,
+                                              p_keep=1-perturb,
+                                              p_change=perturb,
+                                              bin_size=bin_size,
+                                              subsets=subsets)
+
+            #training_data = perturb_hist_gauss(X=X_train, y=y_train,
+                                               #epsilon=np.log((1-perturb)/max(perturb,
+                                                                              #0.000001)),
+                                               #delta=1.01**(-X_train.shape[0]),
+                                               #bin_size=bin_size,
+                                               #subsets=subsets)
 
             if parallel:
                 # do parallel thing
@@ -598,7 +700,7 @@ def plot_perturbation_datasets():
         ('edx/3091x_f12/features-wk10-ld4-b5.csv', 'dropout', 'r', '3091x'),
         ('edx/6002x_f12/features-wk10-ld4-b5.csv', 'dropout', 'b', '6002x'),
     ]
-    x = [float(i)/10 for i in range(10)] + [.95, .98, 1.0]
+    x = [float(i)/20 for i in range(10)]
     scores = pd.DataFrame(index=x, columns=[f[-1] + '-mean' for f in files] +
                                            [f[-1] + '-std' for f in files])
 
@@ -632,7 +734,8 @@ def plot_perturbation_datasets():
                 cols[subsets_ix[-1]] = subset
 
             for pert in x:
-                print '\tperturbation =', pert
+                print
+                #print 'p_keep =', 1 - pert, 'p_change =', pert
                 _, res = test_classifier(classifier=SubspaceForest, df=df,
                                          y=labels, subsets=subsets_ix,
                                          perturb=pert, n_folds=n_folds,
