@@ -1,6 +1,6 @@
 import json
-from flask import Flask, jsonify
-from rsa_ring_signature import Ring
+from flask import Flask, jsonify, request
+from rsa_ring_signature import Ring, PublicKey
 
 app = Flask(__name__)
 
@@ -28,10 +28,22 @@ def register():
     with open('public_keys.json') as f:
         keys = json.load(f)
 
-    keys.append(request.args.get('key'))
+    key = {
+        'e': request.form.get('e'),
+        'n': request.form.get('n'),
+        'size': request.form.get('size'),
+    }
+
+    if key not in keys:
+        print 'registering key', key
+        keys.append(key)
+    else:
+        print 'key already seen!'
 
     with open('public_keys.json', 'w') as f:
-        json.save(f, keys)
+        json.dump(keys, f)
+
+    return 'success'
 
 
 @app.route('/ring', methods=['GET'])
@@ -40,8 +52,10 @@ def get_ring():
     with open('public_keys.json') as f:
         keys = json.load(f)
 
+    print 'received request for ring; returning %d keys' % len(keys)
+
     return jsonify(keys)
 
 
 if __name__ == "__main__":
-    app.run()
+    app.run('0.0.0.0', 8000)
