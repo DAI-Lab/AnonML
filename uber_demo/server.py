@@ -1,6 +1,5 @@
 import json
 from flask import Flask, jsonify
-from flask_sqlalchemy import SQLAlchemy
 from rsa_ring_signature import Ring
 
 app = Flask(__name__)
