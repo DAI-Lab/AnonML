@@ -45,5 +45,4 @@ def get_ring():
 
 
 if __name__ == "__main__":
-    server = Server(keys)
     app.run()
