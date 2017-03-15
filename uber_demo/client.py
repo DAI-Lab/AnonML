@@ -57,7 +57,7 @@ class TorClient(object):
         r = requests.post(url, data=payload, proxies=PROXIES)
 
         if r.status_code == 200:
-            print 'success!'
+            print 'done!'
         else:
             print 'error:', r.status_code
             print r.text
@@ -66,6 +66,7 @@ class TorClient(object):
         """
         grab the list of public keys from the aggregator and generate a ring
         """
+        print 'requesting ring...'
         r = requests.get(self.agg_addr + 'ring')
         for i, k in enumerate(r.json()['keys']):
             try:
@@ -76,11 +77,13 @@ class TorClient(object):
             all_keys.append(key)
 
         self.ring = Ring(all_keys)
+        print 'done!'
 
     def send_data(self, tup_id, bits):
         """
         send a signed message to the aggregator
         """
+        print 'sending data...'
         data_str = str(tup_id) + str(bits)
         sig = self.ring.sign(self.private_key, self.key_idx, data_str)
         url = self.build_url('send_data')
@@ -91,11 +94,12 @@ class TorClient(object):
         }
 
         try:
-            response = requests.post(url, data=payload,  proxies=PROXIES)
+            r = requests.post(url, data=payload,  proxies=PROXIES)
         except Exception as e:
             return 'Unable to reach %s (%s)' % (url, e)
 
-        print response
+        print r
+        print 'done!'
 
     def print_bootstrap_lines(self, line):
         if 'Bootastrapped ' in line:
@@ -119,11 +123,12 @@ class TorClient(object):
             self.tor_ps.kill()
 
 class DataClient(object):
-    def __init__(self, data_path, subset_path, p_keep, p_change, bin_size):
+    def __init__(self, tor_client, data_path, subset_path, p_keep, p_change, bin_size):
         """
         data_path: path to featurized data in csv format
         subset_path: path to list of feature subset tuples as string literals
         """
+        self.tor_client = tor_client
         df = pd.from_csv(data_path)
         self.subsets = []
         with open(subset_path) as f:
@@ -139,13 +144,6 @@ class DataClient(object):
         self.p_change = p_change
         self.bin_size = bin_size
 
-        if verbose >= 2:
-            print
-            if p_change:
-                print 'epsilon =', np.log(p_keep / p_change)
-            else:
-                print 'no perturbation'
-
         # X: matrix of real feature data (X[row, column])
         # y: array of real labels (y[row])
 
@@ -160,12 +158,14 @@ class DataClient(object):
             res += self.bin_size ** i * v
         return res * 2 + self.y[row]
 
-    def perturb_and_send(self, verbose=1):
+    def perturb_and_send(self):
         """
         Perturb each feature subspace and each row separately.
         Send bit vectors representing the presence or absence of each possible
         feature value.
         """
+        self.tor_client.build_ring()
+
         # iterate over subsets on the outside
         for subset in self.subsets:
             size = self.hist_size(subset)
@@ -180,4 +180,4 @@ class DataClient(object):
 
                 # draw one random value for the tuple we actually have
                 bits[idx] = np.random.binomial(1, p_keep)
-                self.client.send_data(subset, list(bits))
+                self.tor_client.send_data(subset, list(bits))
