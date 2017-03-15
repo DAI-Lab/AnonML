@@ -13,6 +13,8 @@ PROXIES = {
     'https': 'localhost:%d' % SOCKS_PORT,
 }
 
+app = Flask(__name__)
+
 class Client(object):
     """
     accepts bit string, signs with ring signature, sends message over new tor
@@ -90,3 +92,5 @@ class Client(object):
 
 if __name__ == '__main__':
     client = Client('cyphe.rs', 2048)
+    client.tor_connect()
+    client.register()

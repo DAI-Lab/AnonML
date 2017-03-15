@@ -19,7 +19,7 @@ from sklearn.svm import SVC
 from sklearn.naive_bayes import GaussianNB
 from sklearn.cross_validation import KFold
 from sklearn.metrics.scorer import check_scoring
-from subset_forest import SubspaceForest
+from subset_forest import SubsetForest
 
 
 TEST_TYPES = ['compare-classifiers', 'subset-size-datasets',
@@ -442,7 +442,7 @@ def test_subset_forest(df, labels, perturb=0, n_trials=1, n_folds=5,
     # This function exists because test_classifier does not have the ability to
     # generate a fresh set of subsets between trials.
     for i in range(n_trials):
-        clf, res = test_classifier(classifier=SubspaceForest, df=df,
+        clf, res = test_classifier(classifier=SubsetForest, df=df,
                                    y=labels, subsets=subsets_ix, perturb=perturb,
                                    n_folds=n_folds, cols=cols)
 
@@ -465,7 +465,7 @@ def test_perturbation(df, labels, x, subsets, n_folds):
     yerr = []
 
     for pert in x:
-        clf, res = test_classifier(classifier=SubspaceForest, df=df,
+        clf, res = test_classifier(classifier=SubsetForest, df=df,
                                    y=labels, subsets=subsets, perturb=pert,
                                    n_folds=n_folds)
         mean = res['auc'].mean()
@@ -502,7 +502,7 @@ def compare_classifiers():
         columns.append(met + '-std')
 
     classifiers = ['random-forest', 'gradient-boost', 'adaboost',
-                   'subspace-forest']
+                   'subset-forest']
     scores = pd.DataFrame(index=classifiers, columns=columns)
 
     # test our weird whatever
@@ -514,11 +514,11 @@ def compare_classifiers():
                                    subset_size=args.subset_size,
                                    subsets=subsets)
     for met, arr in res.items():
-        scores.set_value('subspace-forest', met + '-mean', arr.mean())
-        scores.set_value('subspace-forest', met + '-std', arr.std())
+        scores.set_value('subset-forest', met + '-mean', arr.mean())
+        scores.set_value('subset-forest', met + '-std', arr.std())
 
     print
-    print 'Top scoring features for best SubspaceForest classifier:'
+    print 'Top scoring features for best SubsetForest classifier:'
     best_clf = clfs[0][1]
     best_clf.print_scores()
 
@@ -656,7 +656,7 @@ def plot_perturbation_subset_size():
                 cols[subsets_ix[-1]] = subset
 
             for pert in x:
-                _, res = test_classifier(classifier=SubspaceForest, df=df,
+                _, res = test_classifier(classifier=SubsetForest, df=df,
                                          y=labels, subsets=subsets_ix,
                                          perturb=pert, n_folds=n_folds,
                                          cols=cols)
@@ -738,7 +738,7 @@ def plot_perturbation_datasets():
                 if args.verbose >= 1:
                     print
                     print '\tp_keep =', 1 - pert, 'p_change =', pert
-                _, res = test_classifier(classifier=SubspaceForest, df=df,
+                _, res = test_classifier(classifier=SubsetForest, df=df,
                                          y=labels, subsets=subsets_ix,
                                          perturb=pert, n_folds=n_folds,
                                          cols=cols)

@@ -4,9 +4,6 @@ from flask_sqlalchemy import SQLAlchemy
 from rsa_ring_signature import Ring
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////tmp/test.db'
-db = SQLAlchemy(app)
-
 
 #accepts bit strings from clients and publishes data, then builds, shares model
 

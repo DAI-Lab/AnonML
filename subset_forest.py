@@ -33,7 +33,7 @@ def tree_to_code(tree, feature_names):
     recurse(0, 1)
 
 
-class SubspaceForest(ForestClassifier):
+class SubsetForest(ForestClassifier):
     def __init__(self, verbose=False, tree_metric='f1', n_folds=3, cols=None):
         self._estimator_type = 'classifier'
         self.n_outputs_ = 1
@@ -50,7 +50,7 @@ class SubspaceForest(ForestClassifier):
         """
         if self.verbose:
             print
-            print 'Fitting Subspace Forest with %d subsets' % len(training_data)
+            print 'Fitting Subset Forest with %d subsets' % len(training_data)
 
         # basically static variables
         score_funcs = ['accuracy', 'roc_auc', 'f1']
