@@ -2,7 +2,7 @@ import json
 import numpy as np
 import pandas as pd
 
-from ast import literal_eval as make_tuple
+from ast import literal_eval
 from flask import Flask, jsonify, request
 from rsa_ring_signature import Ring, PublicKey
 
@@ -11,7 +11,7 @@ from rsa_ring_signature import Ring, PublicKey
 class Aggregator(object):
     def __init__(self, subsets, bin_size, p_keep, p_change):
         """
-        subsets: list of tuples
+        subsets: list of tuples of column names
         bin_size: number of bins in each column
         """
         self.bin_size = bin_size
@@ -41,9 +41,9 @@ class Aggregator(object):
             idx /= bin_size
         return my_tup, y
 
-    def add_data(self, tup, data):
-        """ add a bit string to the histogram for a particular tuple """
-        self.histograms[tuple(tup)] += np.array(data)
+    def add_data(self, subset, data):
+        """ add a bit string to the histogram for a particular feature subset """
+        self.histograms[tuple(subset)] += np.array(data)
 
     def renormalize_histogram(self, subset):
         """ renormalize the histogram using the inverse perturbation matrix """
@@ -62,7 +62,7 @@ class Aggregator(object):
         """
         convert a subset's histogram to a collection of features and labels
         """
-        pert_tuples = []    # feature matrix
+        features = []       # feature matrix
         labels = []         # label vector
 
         # convert the histogram into a list of rows
@@ -73,10 +73,11 @@ class Aggregator(object):
             # round floats to ints, and add that many of the tuple
             # TODO: look into linear programming/other solutions to this?
             num = int(round(num))
-            pert_tuples += num * [tup]
+            features += num * [tup]
             labels += num * [label]
 
-        self.X[subset] = pd.DataFrame(pert_tuples, columns=subset).as_matrix()
+        # create our feature matrix and label vector
+        self.X[subset] = pd.DataFrame(features, columns=subset).as_matrix()
         self.y[subset] = np.array(labels)
 
 
@@ -87,14 +88,14 @@ agg = None
 def recv_data():
     """ Client sends data and signature """
     bits = request.args.get('bits')
-    tup_id = request.args.get('tuple')
+    subset = request.args.get('subset')
     signature = request.args.get('signature')
 
     with open('public_keys.json') as f:
         keys = json.load(f)
 
     ring = Ring(keys)
-    data_str = str(tup_id) + str(bits)
+    data_str = str(subset) + str(bits)
 
     if ring.verify(data_str, sig):
         data.append(data)

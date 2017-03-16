@@ -2,23 +2,20 @@ import io
 import os
 import pycurl as curl
 import requests
-import stem.process
 import pdb
 import json
 
+from stem import Signal
+from stem.control import Controller
 from ast import literal_eval as make_tuple
-from stem.util import term
 from rsa_ring_signature import PublicKey, Ring
 from Crypto.PublicKey import RSA
-from flask import Flask
 
 SOCKS_PORT = 7000
 PROXIES = {
     'http': 'socks5://127.0.0.1:%d' % SOCKS_PORT,
     'https': 'socks5://127.0.0.1:%d' % SOCKS_PORT,
 }
-
-app = Flask(__name__)
 
 class TorClient(object):
     """
@@ -33,14 +30,10 @@ class TorClient(object):
         self.agg_addr = addr
         self.agg_port = port
         self.ring = None    # initialized after registration
-        self.tor_ps = None  # initialized when tor starts
 
         print 'generating %d-bit key...' % key_size
         self.my_key = RSA.generate(key_size, os.urandom)
         print 'done'
-
-    def __del__(self):
-        self.tor_disconnect()
 
     def build_url(self, path):
         return 'http://%s:%d/%s' % (self.agg_addr, self.agg_port, path)
@@ -79,16 +72,19 @@ class TorClient(object):
         self.ring = Ring(all_keys)
         print 'done!'
 
-    def send_data(self, tup_id, bits):
+    def send_data(self, subset, bits):
         """
         send a signed message to the aggregator
         """
-        print 'sending data...'
-        data_str = str(tup_id) + str(bits)
+        print 'refreshing identity...'
+        self.new_idnetity()
+
+        print 'sending data for subset...'
+        data_str = str(subset) + str(bits)
         sig = self.ring.sign(self.private_key, self.key_idx, data_str)
         url = self.build_url('send_data')
         payload = {
-            'tuple': tup_id,
+            'subset': subset,
             'bits': bits,
             'signature': sig,
         }
@@ -101,35 +97,23 @@ class TorClient(object):
         print r
         print 'done!'
 
-    def print_bootstrap_lines(self, line):
-        if 'Bootastrapped ' in line:
-            print term.format(line, term.Color.BLUE)
+    def new_identity(self):
+        """ request a new identity from Tor """
+        with Controller.from_port(port=9051) as controller:
+            controller.authenticate()
+            controller.signal(Signal.NEWNYM)
 
-    def tor_connect(self):
-        """ launch the tor process """
-        print term.format('Starting Tor:\n', term.Attr.BOLD)
-
-        self.tor_ps = stem.process.launch_tor_with_config(
-            config = {'SocksPort': str(SOCKS_PORT)},
-            init_msg_handler = self.print_bootstrap_lines,
-        )
-
-        # verify that requests works
-        print 'tor IP:', requests.get('http://httpbin.org/ip').text
-
-    def tor_disconnect(self):
-        """ kill the tor process """
-        if self.tor_ps:
-            self.tor_ps.kill()
 
 class DataClient(object):
-    def __init__(self, tor_client, data_path, subset_path, p_keep, p_change, bin_size):
+    def __init__(self, tor_client, data_path, subset_path, label_col,
+                 bin_size=5, p_keep=0.9, p_change=0.1):
         """
         data_path: path to featurized data in csv format
         subset_path: path to list of feature subset tuples as string literals
         """
         self.tor_client = tor_client
-        df = pd.from_csv(data_path)
+        self.df = pd.read_csv(data_path)
+        self.label_col = label_col
         self.subsets = []
         with open(subset_path) as f:
             for line in f:
@@ -137,15 +121,12 @@ class DataClient(object):
 
         if subset_path is None:
             # default to one set per variable
-            subsets = [(i,) for i in range(self.X.shape[1])]
+            subsets = [(c,) for c in self.df.columns]
 
         assert p_keep > p_change
         self.p_keep = p_keep
         self.p_change = p_change
         self.bin_size = bin_size
-
-        # X: matrix of real feature data (X[row, column])
-        # y: array of real labels (y[row])
 
     def hist_size(self, subset):
         """ get the number of bars a histogram should have """
@@ -154,9 +135,9 @@ class DataClient(object):
     def hist_index(self, subset, row):
         """ Convert a tuple to an index into the histogram """
         res = 0
-        for i, v in enumerate(self.X[row][np.array(subset)]):
+        for i, v in enumerate(self.df.ix[row, list(subset)]):
             res += self.bin_size ** i * v
-        return res * 2 + self.y[row]
+        return res * 2 + self.df.ix[row, self.label_col]
 
     def perturb_and_send(self):
         """
@@ -171,7 +152,7 @@ class DataClient(object):
             size = self.hist_size(subset)
 
             # random response for each row
-            for row in xrange(self.X.shape[0]):
+            for row in xrange(self.df.shape[0]):
                 # draw a random set of tuples to return
                 bits = np.random.binomial(1, p_change, size)
 
