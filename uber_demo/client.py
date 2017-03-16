@@ -83,6 +83,7 @@ class TorClient(object):
         print 'initialized ring with %d members' % len(all_keys)
 
     def key_index(self):
+        """ find the index of our key in the ring signature """
         if not self.ring:
             return None
         all_keys = [(k.e, k.n) for k in self.ring.public_keys]
@@ -90,9 +91,7 @@ class TorClient(object):
         return index
 
     def send_data(self, subset, bits):
-        """
-        send a signed message to the aggregator
-        """
+        """ send a signed message to the aggregator """
         print 'refreshing identity...'
         self.new_idnetity()
 
