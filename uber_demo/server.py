@@ -98,7 +98,7 @@ def recv_data():
     data_str = str(subset) + str(bits)
 
     if ring.verify(data_str, sig):
-        data.append(data)
+        agg.add_data(subset, data)
 
         return 'success'
     else:
@@ -138,6 +138,13 @@ def get_ring():
     print 'received request for ring; returning %d keys' % len(keys)
 
     return jsonify(keys)
+
+
+@app.route('/subsets', methods=['GET'])
+def get_subsets():
+    """ Return a set of public keys to use in a ring """
+    # TODO
+    pass
 
 
 if __name__ == "__main__":

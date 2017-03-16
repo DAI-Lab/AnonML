@@ -47,7 +47,9 @@ class TorClient(object):
         public_key = PublicKey(self.my_key.e, self.my_key.n, self.my_key.size())
         payload = public_key.to_json()
         url = self.build_url('register')
-        r = requests.post(url, data=payload, proxies=PROXIES)
+
+        # no tor proxy here
+        r = requests.post(url, data=payload)
 
         if r.status_code == 200:
             print 'done!'
@@ -60,7 +62,15 @@ class TorClient(object):
         grab the list of public keys from the aggregator and generate a ring
         """
         print 'requesting ring...'
+        # no tor proxy here
         r = requests.get(self.agg_addr + 'ring')
+
+        if r.status_code == 200:
+            print 'done!'
+        else:
+            print 'error:', r.status_code
+            print r.text
+
         for i, k in enumerate(r.json()['keys']):
             try:
                 key = PublicKey(k['e'], k['n'], k['size'])
@@ -70,7 +80,14 @@ class TorClient(object):
             all_keys.append(key)
 
         self.ring = Ring(all_keys)
-        print 'done!'
+        print 'initialized ring with %d members' % len(all_keys)
+
+    def key_index(self):
+        if not self.ring:
+            return None
+        all_keys = [(k.e, k.n) for k in self.ring.public_keys]
+        index = all_keys.index((self.my_key.e, self.my_key.n))
+        return index
 
     def send_data(self, subset, bits):
         """
@@ -81,7 +98,7 @@ class TorClient(object):
 
         print 'sending data for subset...'
         data_str = str(subset) + str(bits)
-        sig = self.ring.sign(self.private_key, self.key_idx, data_str)
+        sig = self.ring.sign(self.private_key, self.key_idx(), data_str)
         url = self.build_url('send_data')
         payload = {
             'subset': subset,
@@ -89,13 +106,14 @@ class TorClient(object):
             'signature': sig,
         }
 
-        try:
-            r = requests.post(url, data=payload,  proxies=PROXIES)
-        except Exception as e:
-            return 'Unable to reach %s (%s)' % (url, e)
+        # make sure we are using tor here
+        r = requests.post(url, data=payload, proxies=PROXIES)
 
-        print r
-        print 'done!'
+        if r.status_code == 200:
+            print 'done!'
+        else:
+            print 'error:', r.status_code
+            print r.text
 
     def new_identity(self):
         """ request a new identity from Tor """

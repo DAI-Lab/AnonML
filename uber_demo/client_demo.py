@@ -41,7 +41,7 @@ if __name__ == '__main__':
         tor = TorClient('cyphe.rs', port=8000, key_size=1024)
         tor.tor_connect()
         tor.register()
-        peer = DataClient(tor, data_path='data/data_%d.csv' % i,
+        peer = DataClient(tor, data_path='data/demo-data-%d.csv' % i,
                           subset_path='data/subsets.txt',
                           p_keep=0.9, p_change=0.1, bin_size=5)
         peers.append(peer)
