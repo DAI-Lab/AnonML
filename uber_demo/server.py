@@ -149,8 +149,9 @@ def get_subsets():
 
 if __name__ == "__main__":
     subsets = []
-    with open('subsets.txt') as f:
+    with open('data/subsets.txt') as f:
         for line in f:
             subsets.append(literal_eval(line))
 
     agg = Aggregator(subsets=subsets, bin_size=5, p_keep=0.9, p_change=0.1)
+    app.run(host='0.0.0.0', port=8000)

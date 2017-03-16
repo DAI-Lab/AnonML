@@ -38,7 +38,7 @@ def tor_disconnect():
 if __name__ == '__main__':
     # register all peers with the aggregator
     for i in range(10):
-        tor = TorClient('cyphe.rs', port=8000, key_size=1024)
+        tor = TorClient(sys.argv[1], port=8000, key_size=1024)
         tor.tor_connect()
         tor.register()
         peer = DataClient(tor, data_path='data/demo-data-%d.csv' % i,
