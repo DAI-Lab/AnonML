@@ -8,6 +8,8 @@ from rsa_ring_signature import Ring, PublicKey
 
 #accepts bit strings from clients and publishes data, then builds, shares model
 
+PK_PATH = 'data/public_keys.json'
+
 class Aggregator(object):
     def __init__(self, subsets, bin_size, p_keep, p_change):
         """
@@ -91,7 +93,7 @@ def recv_data():
     subset = request.args.get('subset')
     signature = request.args.get('signature')
 
-    with open('public_keys.json') as f:
+    with open(PK_PATH) as f:
         keys = json.load(f)
 
     ring = Ring(keys)
@@ -108,7 +110,7 @@ def recv_data():
 @app.route('/register', methods=['POST'])
 def register():
     """ Client says they want to take part in the next round, sends key """
-    with open('public_keys.json') as f:
+    with open(PK_PATH) as f:
         keys = json.load(f)
 
     key = {
@@ -123,7 +125,7 @@ def register():
     else:
         print 'key already seen!'
 
-    with open('public_keys.json', 'w') as f:
+    with open(PK_PATH) as f:
         json.dump(keys, f)
 
     return 'success'
@@ -132,7 +134,7 @@ def register():
 @app.route('/ring', methods=['GET'])
 def get_ring():
     """ Return a set of public keys to use in a ring """
-    with open('public_keys.json') as f:
+    with open(PK_PATH) as f:
         keys = json.load(f)
 
     print 'received request for ring; returning %d keys' % len(keys)
@@ -152,6 +154,9 @@ if __name__ == "__main__":
     with open('data/subsets.txt') as f:
         for line in f:
             subsets.append(literal_eval(line))
+
+    with open(PK_PATH, 'w') as f:
+        f.write('[]')
 
     agg = Aggregator(subsets=subsets, bin_size=5, p_keep=0.9, p_change=0.1)
     app.run(host='0.0.0.0', port=8000)
