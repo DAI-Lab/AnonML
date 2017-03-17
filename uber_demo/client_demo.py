@@ -1,5 +1,6 @@
 import json
 import requests
+import sys
 import numpy as np
 import pandas as pd
 import stem.process
@@ -37,15 +38,22 @@ def tor_disconnect():
 
 if __name__ == '__main__':
     # register all peers with the aggregator
+    peers = []
     for i in range(10):
+        print 'client', i
         tor = TorClient(sys.argv[1], port=8000, key_size=1024)
-        tor.tor_connect()
         tor.register()
         peer = DataClient(tor, data_path='data/demo-data-%d.csv' % i,
-                          subset_path='data/subsets.txt',
-                          p_keep=0.9, p_change=0.1, bin_size=5)
+                          subset_path='data/subsets.txt', label_col='dropout',
+                          bin_size=5, p_keep=0.9, p_change=0.1)
         peers.append(peer)
 
-    # have each peer send data
+    print
+    print 'registration complete!'
+    print
+
+    # have each peer send data anonymously
+    tor_connect()
     for p in peers:
         p.perturb_and_send()
+    tor_disconnect()

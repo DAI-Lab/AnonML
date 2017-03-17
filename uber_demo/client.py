@@ -1,13 +1,14 @@
 import io
 import os
-import pycurl as curl
 import requests
 import pdb
 import json
+import numpy as np
+import pandas as pd
 
 from stem import Signal
 from stem.control import Controller
-from ast import literal_eval as make_tuple
+from ast import literal_eval
 from rsa_ring_signature import PublicKey, Ring
 from Crypto.PublicKey import RSA
 
@@ -56,6 +57,7 @@ class TorClient(object):
         else:
             print 'error:', r.status_code
             print r.text
+            exit(1)
 
     def build_ring(self):
         """
@@ -63,17 +65,19 @@ class TorClient(object):
         """
         print 'requesting ring...'
         # no tor proxy here
-        r = requests.get(self.agg_addr + 'ring')
+        r = requests.get(self.build_url('ring'))
 
         if r.status_code == 200:
             print 'done!'
         else:
             print 'error:', r.status_code
             print r.text
+            exit(1)
 
-        for i, k in enumerate(r.json()['keys']):
+        all_keys = []
+        for i, k in enumerate(r.json()):
             try:
-                key = PublicKey(k['e'], k['n'], k['size'])
+                key = PublicKey(int(k['e']), int(k['n']), int(k['size']))
             except KeyError as e:
                 print 'Key at index', i, 'not properly formatted. Missing attribute', e
                 return
@@ -171,11 +175,11 @@ class DataClient(object):
             # random response for each row
             for row in xrange(self.df.shape[0]):
                 # draw a random set of tuples to return
-                bits = np.random.binomial(1, p_change, size)
+                bits = np.random.binomial(1, self.p_change, size)
 
                 # calculate the index of our tuple in the list
-                idx = hist_index(subset, row)
+                idx = self.hist_index(subset, row)
 
                 # draw one random value for the tuple we actually have
-                bits[idx] = np.random.binomial(1, p_keep)
+                bits[idx] = np.random.binomial(1, self.p_keep)
                 self.tor_client.send_data(subset, list(bits))
