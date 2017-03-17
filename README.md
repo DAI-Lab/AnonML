@@ -1,6 +1,6 @@
 Setup:
 
-sudo apt-get install python-pip virtualenv libssl-dev libcurl4-openssl-dev python-dev
+sudo apt-get install python-pip virtualenv
 
 virutalenv venv
 . venv/bin/activate
