@@ -125,7 +125,7 @@ def register():
     else:
         print 'key already seen!'
 
-    with open(PK_PATH) as f:
+    with open(PK_PATH, 'w') as f:
         json.dump(keys, f)
 
     return 'success'
