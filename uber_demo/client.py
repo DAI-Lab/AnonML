@@ -97,11 +97,11 @@ class TorClient(object):
     def send_data(self, subset, bits):
         """ send a signed message to the aggregator """
         print 'refreshing identity...'
-        self.new_idnetity()
+        self.new_identity()
 
         print 'sending data for subset...'
         data_str = str(subset) + str(bits)
-        sig = self.ring.sign(self.private_key, self.key_idx(), data_str)
+        sig = self.ring.sign(self.my_key, self.key_index(), data_str)
         url = self.build_url('send_data')
         payload = {
             'subset': subset,
