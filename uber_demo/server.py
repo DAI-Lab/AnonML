@@ -101,7 +101,7 @@ def recv_data():
     ring = Ring(keys)
     data_str = str(subset) + str(bits)
 
-    if ring.verify(data_str, sig):
+    if ring.verify(data_str, signature):
         agg.add_data(subset, data)
         return 'success'
     else:
