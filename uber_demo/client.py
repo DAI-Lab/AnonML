@@ -99,17 +99,21 @@ class TorClient(object):
         print 'refreshing identity...'
         self.new_identity()
 
-        print 'sending data for subset...'
+        # generate the payload (TODO: I suck at web)
+        subset = [unicode(f) for f in subset]
         data_str = str(subset) + str(bits)
+        print data_str
         sig = self.ring.sign(self.my_key, self.key_index(), data_str)
         url = self.build_url('send_data')
-        payload = {
+        data = {
             'subset': subset,
             'bits': bits,
             'signature': sig,
         }
+        payload = {'data': json.dumps(data)}
 
         # make sure we are using tor here
+        print 'sending data for subset...'
         r = requests.post(url, data=payload, proxies=PROXIES)
 
         if r.status_code == 200:
