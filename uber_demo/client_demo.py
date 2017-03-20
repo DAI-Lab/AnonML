@@ -39,7 +39,7 @@ def tor_disconnect():
 if __name__ == '__main__':
     # register all peers with the aggregator
     peers = []
-    for i in range(10):
+    for i in range(3):
         print 'client', i
         tor = TorClient(sys.argv[1], port=8000, key_size=1024)
         tor.register()

@@ -89,15 +89,14 @@ agg = None
 @app.route('/send_data', methods=['POST'])
 def recv_data():
     """ Client sends data and signature """
-    bits = request.args.get('bits')
-    subset = request.args.get('subset')
-    signature = request.args.get('signature')
+    bits = request.form['bits']
+    subset = request.form['subset']
+    signature = request.form['signature']
 
     keys = []
     with open(PK_PATH) as f:
         for i, k in enumerate(json.load(f)):
             keys.append(PublicKey(int(k['e']), int(k['n']), int(k['size'])))
-
     ring = Ring(keys)
     data_str = str(subset) + str(bits)
 
@@ -115,9 +114,9 @@ def register():
         keys = json.load(f)
 
     key = {
-        'e': request.form.get('e'),
-        'n': request.form.get('n'),
-        'size': request.form.get('size'),
+        'e': request.form['e'],
+        'n': request.form['n'],
+        'size': request.form['size'],
     }
 
     if key not in keys:
