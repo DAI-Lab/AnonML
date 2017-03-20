@@ -26,8 +26,9 @@ class Aggregator(object):
 
         # for each subset, create a new (empty) histogram
         for subset in subsets:
-            size = self.hist_size(subset)
-            self.histograms[subset] = np.zeros(size)
+            ss = tuple(subset)
+            size = self.hist_size(ss)
+            self.histograms[ss] = np.zeros(size)
 
     def hist_size(self, subset):
         """ get the number of bars a histogram should have """
@@ -43,9 +44,9 @@ class Aggregator(object):
             idx /= bin_size
         return my_tup, y
 
-    def add_data(self, subset, data):
+    def add_data(self, subset, bits):
         """ add a bit string to the histogram for a particular feature subset """
-        self.histograms[tuple(subset)] += np.array(data)
+        self.histograms[tuple(subset)] += np.array(bits).astype(int)
 
     def renormalize_histogram(self, subset):
         """ renormalize the histogram using the inverse perturbation matrix """
@@ -89,10 +90,11 @@ agg = None
 @app.route('/send_data', methods=['POST'])
 def recv_data():
     """ Client sends data and signature """
-    bits = request.form['bits']
-    subset = request.form['subset']
-    signature = request.form['signature']
-    print signature
+    data = json.loads(request.form['data'])
+    bits = data['bits']
+    subset = data['subset']
+    signature = data['signature']
+    print 'signature:', signature
 
     keys = []
     with open(PK_PATH) as f:
@@ -100,9 +102,10 @@ def recv_data():
             keys.append(PublicKey(int(k['e']), int(k['n']), int(k['size'])))
     ring = Ring(keys)
     data_str = str(subset) + str(bits)
+    print 'data str:', data_str
 
     if ring.verify(data_str, signature):
-        agg.add_data(subset, data)
+        agg.add_data(subset, bits)
         return 'success'
     else:
         return 'bad signature', 400
