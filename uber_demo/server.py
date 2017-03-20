@@ -93,15 +93,16 @@ def recv_data():
     subset = request.args.get('subset')
     signature = request.args.get('signature')
 
+    keys = []
     with open(PK_PATH) as f:
-        keys = json.load(f)
+        for i, k in enumerate(json.load(f)):
+            keys.append(PublicKey(int(k['e']), int(k['n']), int(k['size'])))
 
     ring = Ring(keys)
     data_str = str(subset) + str(bits)
 
     if ring.verify(data_str, sig):
         agg.add_data(subset, data)
-
         return 'success'
     else:
         return 'bad signature', 400

@@ -80,7 +80,7 @@ class TorClient(object):
                 key = PublicKey(int(k['e']), int(k['n']), int(k['size']))
             except KeyError as e:
                 print 'Key at index', i, 'not properly formatted. Missing attribute', e
-                return
+                exit(1)
             all_keys.append(key)
 
         self.ring = Ring(all_keys)
