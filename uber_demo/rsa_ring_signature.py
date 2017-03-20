@@ -138,6 +138,7 @@ if __name__ == '__main__':
     print "checking ring..."
     ring = Ring(public_keys)
     sig = ring.sign(keys[1], 1, 'hello')
+    print type(sig)
     ver = ring.verify('hello', sig) and not ring.verify('jello', sig)
     if ver:
         print 'OK!'

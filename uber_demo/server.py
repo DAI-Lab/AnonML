@@ -92,6 +92,7 @@ def recv_data():
     bits = request.form['bits']
     subset = request.form['subset']
     signature = request.form['signature']
+    print signature
 
     keys = []
     with open(PK_PATH) as f:
