@@ -18,7 +18,7 @@ PROXIES = {
     'https': 'socks5://127.0.0.1:%d' % SOCKS_PORT,
 }
 
-class TorClient(object):
+class NetClient(object):
     """
     accepts bit string, signs with ring signature, sends message over new tor
     circuit
@@ -86,6 +86,20 @@ class TorClient(object):
         self.ring = Ring(all_keys)
         print 'initialized ring with %d members' % len(all_keys)
 
+    def get_subsets(self):
+        """ grab the list of feature subsets from the aggregator """
+        print 'requesting subsets...'
+        r = requests.get(self.build_url('subsets'))
+
+        if r.status_code == 200:
+            print 'done!'
+        else:
+            print 'error:', r.status_code
+            print r.text
+            exit(1)
+
+        return [tuple(l) for l in r.json()]
+
     def key_index(self):
         """ find the index of our key in the ring signature """
         if not self.ring:
@@ -96,7 +110,6 @@ class TorClient(object):
 
     def send_data(self, subset, bits):
         """ send a signed message to the aggregator """
-        print 'refreshing identity...'
         self.new_identity()
 
         # generate the payload (TODO: I suck at web)
@@ -124,29 +137,22 @@ class TorClient(object):
 
     def new_identity(self):
         """ request a new identity from Tor """
+        print 'refreshing identity...'
         with Controller.from_port(port=9051) as controller:
             controller.authenticate()
-            controller.signal(Signal.NEWNYM)
+            controller.signal(Signal.HUP)
+        print 'done!'
 
 
 class DataClient(object):
-    def __init__(self, tor_client, data_path, subset_path, label_col,
+    def __init__(self, net_client, data_path, label_col,
                  bin_size=5, p_keep=0.9, p_change=0.1):
         """
         data_path: path to featurized data in csv format
-        subset_path: path to list of feature subset tuples as string literals
         """
-        self.tor_client = tor_client
+        self.net_client = net_client
         self.df = pd.read_csv(data_path)
         self.label_col = label_col
-        self.subsets = []
-        with open(subset_path) as f:
-            for line in f:
-                self.subsets.append(literal_eval(line))
-
-        if subset_path is None:
-            # default to one set per variable
-            subsets = [(c,) for c in self.df.columns]
 
         assert p_keep > p_change
         self.p_keep = p_keep
@@ -170,10 +176,12 @@ class DataClient(object):
         Send bit vectors representing the presence or absence of each possible
         feature value.
         """
-        self.tor_client.build_ring()
+        # get information from the aggregator
+        self.net_client.build_ring()
+        subsets = self.net_client.get_subsets()
 
         # iterate over subsets on the outside
-        for subset in self.subsets:
+        for subset in subsets:
             size = self.hist_size(subset)
 
             # random response for each row
@@ -186,4 +194,4 @@ class DataClient(object):
 
                 # draw one random value for the tuple we actually have
                 bits[idx] = np.random.binomial(1, self.p_keep)
-                self.tor_client.send_data(subset, list(bits))
+                self.net_client.send_data(subset, list(bits))

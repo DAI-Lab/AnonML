@@ -9,7 +9,7 @@ from stem.util import term
 from ast import literal_eval as make_tuple
 from flask import Flask, jsonify, request
 from rsa_ring_signature import Ring, PublicKey
-from client import TorClient, DataClient, SOCKS_PORT, PROXIES
+from client import NetClient, DataClient, SOCKS_PORT, PROXIES
 
 tor_ps = None
 
@@ -22,7 +22,13 @@ def tor_connect():
     print term.format('Starting Tor:\n', term.Attr.BOLD)
 
     global tor_ps
-    config = {'SocksPort': str(SOCKS_PORT), 'ControlPort': '9051'}
+    config = {
+        'SocksPort': str(SOCKS_PORT),
+        'ControlPort': '9051',
+        'Log': [
+            'DEBUG file /tmp/tor_debug.log',
+        ],
+    }
     tor_ps = stem.process.launch_tor_with_config(
         config=config, init_msg_handler=print_bootstrap_lines)
 
@@ -41,11 +47,11 @@ if __name__ == '__main__':
     peers = []
     for i in range(3):
         print 'client', i
-        tor = TorClient(sys.argv[1], port=8000, key_size=1024)
-        tor.register()
-        peer = DataClient(tor, data_path='data/demo-data-%d.csv' % i,
-                          subset_path='data/subsets.txt', label_col='dropout',
-                          bin_size=5, p_keep=0.9, p_change=0.1)
+        net = NetClient(sys.argv[1], port=8000, key_size=1024)
+        net.register()
+        peer = DataClient(net, data_path='data/demo-data-%d.csv' % i,
+                          label_col='dropout', bin_size=5, p_keep=0.9,
+                          p_change=0.1)
         peers.append(peer)
 
     print
