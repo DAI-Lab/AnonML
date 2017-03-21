@@ -148,9 +148,12 @@ def get_ring():
 
 @app.route('/subsets', methods=['GET'])
 def get_subsets():
-    """ Return a set of public keys to use in a ring """
-    # TODO
-    pass
+    """ Return the set of subsets to be used by the clients """
+    subsets = []
+    with open('data/subsets.txt') as f:
+        for line in f:
+            subsets.append(literal_eval(line))
+    return jsonify(subsets)
 
 
 if __name__ == "__main__":
