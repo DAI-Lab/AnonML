@@ -19,7 +19,7 @@ from sklearn.svm import SVC
 from sklearn.naive_bayes import GaussianNB
 from sklearn.model_selection import KFold
 from sklearn.metrics.scorer import check_scoring
-from subset_forest import SubsetForest
+from anonml.subset_forest import SubsetForest
 
 
 TEST_TYPES = ['compare-classifiers', 'subset-size-datasets',
@@ -113,6 +113,8 @@ def perturb_hist_pram(X, y, perturb, bin_size, subsets=None):
     # iterate over subsets on the outside
     for subset in subsets:
         size = hsize(subset)
+        p_change = perturb / hsize
+        p_keep = 1 - perturb
 
         # create two blank histograms: one for the real values, one for the
         # perturbed values
@@ -121,18 +123,20 @@ def perturb_hist_pram(X, y, perturb, bin_size, subsets=None):
 
         # random response for each row
         for row in xrange(X.shape[0]):
-            # draw a random set of tuples to return
-            myhist = np.random.binomial(1, p_change, size)
-
+            myhist = np.zeros(size).astype(float)
             # calculate the index of our tuple in the list
             idx = hist_idx(subset, row)
 
             # add to the "real" histogram
             old_hist[idx] += 1
 
+            # perturb if necessary
+            if random.random() > p_keep:
+                # pull random index
+                idx = random.randint(0, size)
+
             # draw one random value for the tuple we actually have
-            myhist[idx] = np.random.binomial(1, p_keep)
-            pert_hist += myhist
+            pert_hist[idx] += 1
 
         # renormalize the histogram
         pmat = np.ones((size, size)) * p_change
