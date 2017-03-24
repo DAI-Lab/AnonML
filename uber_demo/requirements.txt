@@ -1,0 +1,6 @@
+numpy==1.12.0
+pandas==0.19.2
+pycrypto==2.6.1
+Flask==0.12
+Requests==2.13.0
+stem==1.5.4

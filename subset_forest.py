@@ -6,7 +6,7 @@ from random import shuffle
 from sklearn import tree as sktree
 from sklearn.tree import _tree
 from sklearn.ensemble.forest import ForestClassifier
-from sklearn.cross_validation import KFold
+from sklearn.model_selection import KFold
 from sklearn.metrics.scorer import check_scoring
 
 

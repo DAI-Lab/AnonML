@@ -17,7 +17,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.naive_bayes import GaussianNB
-from sklearn.cross_validation import KFold
+from sklearn.model_selection import KFold
 from sklearn.metrics.scorer import check_scoring
 from subset_forest import SubsetForest
 
@@ -25,6 +25,9 @@ from subset_forest import SubsetForest
 TEST_TYPES = ['compare-classifiers', 'subset-size-datasets',
               'perturbation-subset-size', 'perturbation',
               'perturbation-datasets', 'binning-datasets']
+
+PERT_TYPES = ['bits', 'pram', 'gauss']
+
 
 ap = argparse.ArgumentParser()
 ap.add_argument('tests', type=str, nargs='+', choices=TEST_TYPES,
@@ -55,13 +58,117 @@ ap.add_argument('--num-trials', type=int, default=1,
                 help='number of times to try with different subsets')
 ap.add_argument('--num-folds', type=int, default=5,
                 help='number of folds on which to test each classifier')
+ap.add_argument('--perturb-type', type=str, default='bits',
+                help='technique to use to perturb data')
 
 
 ###############################################################################
-##  Misc helper functions  ####################################################
+##  Perturbation functions  ###################################################
 ###############################################################################
 
-def perturb_hist_pram(X, y, p_keep, p_change, bin_size, subsets=None):
+def perturb_hist_pram(X, y, perturb, bin_size, subsets=None):
+    """
+    Perturb each feature subspace separately.
+    Each peer sends a bit vector representing the presence or absence of each
+    possible feature value.
+
+    X: matrix of real feature data (X[row, column])
+    y: array of real labels (y[row])
+    Output: dict mapping each subspace to a perturbed (X, y) pair
+    """
+
+    if subsets is None:
+        # default to one set per variable
+        subsets = [(i,) for i in range(X.shape[1])]
+
+    output = {}
+
+    if args.verbose >= 2:
+        print
+        if p_change:
+            print 'epsilon =', np.log(p_keep / p_change)
+        else:
+            print 'no perturbation'
+
+    # get the number of possible tuples for a subset
+    hsize = lambda subset: 2 * bin_size ** len(subset)
+
+    # convert a tuple to an index into the histogram
+    def hist_idx(subset, row):
+        res = 0
+        for i, v in enumerate(X[row][np.array(subset)]):
+            res += bin_size ** i * v
+        return res * 2 + y[row]
+
+    # convert the histogram index back into a tuple
+    def idx_to_tuple(idx, degree):
+        my_tup = []
+        y = bool(idx % 2)
+        idx /= 2
+        for _ in range(degree):
+            my_tup.append(idx % bin_size)
+            idx /= bin_size
+        return my_tup, y
+
+    # iterate over subsets on the outside
+    for subset in subsets:
+        size = hsize(subset)
+
+        # create two blank histograms: one for the real values, one for the
+        # perturbed values
+        old_hist = np.zeros(size)
+        pert_hist = np.zeros(size)
+
+        # random response for each row
+        for row in xrange(X.shape[0]):
+            # draw a random set of tuples to return
+            myhist = np.random.binomial(1, p_change, size)
+
+            # calculate the index of our tuple in the list
+            idx = hist_idx(subset, row)
+
+            # add to the "real" histogram
+            old_hist[idx] += 1
+
+            # draw one random value for the tuple we actually have
+            myhist[idx] = np.random.binomial(1, p_keep)
+            pert_hist += myhist
+
+        # renormalize the histogram
+        pmat = np.ones((size, size)) * p_change
+        pmat += np.identity(size) * (p_keep - p_change)
+        ipmat = np.linalg.inv(pmat)
+        final_hist = np.dot(ipmat, pert_hist)
+
+        pert_tuples = []    # covariate rows
+        labels = []         # label data
+
+        # convert the histogram into a list of rows
+        for i, num in enumerate(final_hist):
+            # map histogram index back to tuple
+            tup, label = idx_to_tuple(i, len(subset))
+
+            # round floats to ints, and add that many of the tuple
+            # TODO: look into linear programming/other solutions to this
+            num = int(round(num))
+            pert_tuples += num * [tup]
+            labels += num * [label]
+
+        # calculate L1, L2 norm errors
+        l1_err = sum(abs(old_hist - final_hist))
+        l2_err = sum((old_hist - final_hist) ** 2)
+
+        #print "Total rows: old = %d, new = %d" % (sum(old_hist), sum(final_hist))
+        #print "L1 error = %d, L2 error = %d" % (l1_err, l2_err)
+
+        # aand back into a matrix
+        out_X = pd.DataFrame(pert_tuples, columns=subset).as_matrix()
+        out_y = np.array(labels)
+        output[subset] = out_X, out_y
+
+    return output
+
+def perturb_hist_bits(X, y, p_keep, p_change, bin_size, subsets=None):
     """
     Perturb each feature subspace separately.
     Each peer sends a bit vector representing the presence or absence of each
@@ -250,6 +357,10 @@ def perturb_hist_gauss(X, y, epsilon, delta, bin_size, subsets=None):
     return output
 
 
+###############################################################################
+##  Misc helper functions  ####################################################
+###############################################################################
+
 def perturb_dataframe(df, perturbation, subsets=None):
     """
     Perturb a whole dataframe at once. Consistency.
@@ -370,18 +481,26 @@ def test_classifier(classifier, df, y, subsets=None, perturb=0, n_trials=1,
                             range(X.shape[1])]) + 1
 
             # perturb data as a histogram
-            training_data = perturb_hist_pram(X=X_train, y=y_train,
-                                              p_keep=1-perturb,
-                                              p_change=perturb,
-                                              bin_size=bin_size,
-                                              subsets=subsets)
+            if args.perturb_type == 'gauss':
+                eps = np.log((1-perturb) / max(perturb, 0.000001)),
+                delta = 1.01 ** (-X_train.shape[0])
+                training_data = perturb_hist_gauss(X=X_train, y=y_train,
+                                                   epsilon=eps, delta=delta,
+                                                   bin_size=bin_size,
+                                                   subsets=subsets)
+            elif args.perturb_type == 'pram':
+                # TODO
+                training_data = perturb_hist_pram(X=X_train, y=y_train,
+                                                  perturb=perturb,
+                                                  bin_size=bin_size,
+                                                  subsets=subsets)
+            elif args.perturb_type == 'bits':
+                training_data = perturb_hist_bits(X=X_train, y=y_train,
+                                                  p_keep=1-perturb,
+                                                  p_change=perturb,
+                                                  bin_size=bin_size,
+                                                  subsets=subsets)
 
-            #training_data = perturb_hist_gauss(X=X_train, y=y_train,
-                                               #epsilon=np.log((1-perturb)/max(perturb,
-                                                                              #0.000001)),
-                                               #delta=1.01**(-X_train.shape[0]),
-                                               #bin_size=bin_size,
-                                               #subsets=subsets)
 
             if parallel:
                 # do parallel thing
