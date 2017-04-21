@@ -15,10 +15,10 @@ def perturb_hist_pram(values, size, epsilon, sample):
     old_hist = np.zeros(size)
     pert_hist = np.zeros(size)
 
-    # the p_keep and p_change parameters depend on the cardinality of the
+    # the p and q parameters depend on the cardinality of the
     # categorical variable
-    p_keep = lam / float(lam + size - 1)
-    p_change = 1 / float(lam + size - 1)
+    p = lam / float(lam + size - 1)
+    q = 1 / float(lam + size - 1)
 
     # random response for each row
     for idx in values:
@@ -26,20 +26,26 @@ def perturb_hist_pram(values, size, epsilon, sample):
         old_hist[idx] += 1
 
         # perturb if necessary
-        if random.random() > p_keep:
+        if random.random() > p - q:
             # pull random index
-            idx = random.randint(0, size-1)
+            idx = random.choice(range(size))
 
         # sample the whole set
         if random.random() < sample:
             pert_hist[idx] += 1
 
-    # renormalize the histogram
-    pmat = np.ones((size, size)) * p_change
-    pmat += np.identity(size) * (p_keep - p_change)
-    ipmat = np.linalg.inv(pmat)
-    final_hist = np.dot(ipmat, pert_hist)
+    # generate the perturbation matrix and then find its inverse
+    # adds more error than the MLE technique
+    #pmat = np.ones((size, size)) * q
+    #pmat += np.identity(size) * (p - q)
+    #ipmat = np.linalg.inv(pmat)
+    #final_hist = np.dot(ipmat, pert_hist)
 
+    # MLE of actual counts
+    final_hist = pert_hist - q * len(values)
+    final_hist /= (p - q)
+
+    #return old_hist, pert_hist
     return old_hist, final_hist
 
 
@@ -83,13 +89,15 @@ def perturb_hist_bits(values, size, epsilon, sample, p=None):
             pert_hist += myhist
 
     # generate the perturbation matrix and then find its inverse
-    pmat = np.ones((size, size)) * q
-    pmat += np.identity(size) * (p - q)
-    ipmat = np.linalg.inv(pmat)
+    ## NO BAD ADDS LOTS OF ERROR
+    #pmat = np.ones((size, size)) * q
+    #pmat += np.identity(size) * (p - q)
+    #ipmat = np.linalg.inv(pmat)
 
-    # renormalize the histogram to account for error
-    final_hist = np.dot(ipmat, pert_hist)
+    final_hist = pert_hist - q * len(values)
+    final_hist /= (p - q)
 
+    #return old_hist, pert_hist
     return old_hist, final_hist
 
 
@@ -103,7 +111,7 @@ def perturb_hist_gauss(values, size, epsilon, delta):
     sigma = 2 * np.log(1.25 / delta) / epsilon
 
     def hist_elt(idx):
-        arr = np.zeros(hsize(subset))
+        arr = np.zeros(size)
         arr[idx] += 1
         return arr
 

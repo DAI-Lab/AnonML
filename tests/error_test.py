@@ -13,7 +13,7 @@ from anonml.subset_forest import SubsetForest
 from perturb import *
 
 TEST_TYPES = ['synth-random', 'synth-skewed', 'synth-equal', 'synth-all-same',
-              'data', 'compare-dist']
+              'data', 'compare-dist', 'stderr']
 
 PERT_TYPES = ['bits', 'pram', 'gauss']
 
@@ -44,7 +44,6 @@ ap.add_argument('--subset-size', type=int, default=3,
 ap.add_argument('--num-trials', type=int, default=1,
                 help='number of times to try with different, random subsets')
 
-
 # options for developing synthetic data
 ap.add_argument('--n-peers', type=int, default=10000,
                 help='number of peers to generate data for')
@@ -58,7 +57,41 @@ def l2_error(old_hist, pert_hist):
     """ calculate the l2 norm of the type estimation error """
     diff_hist = old_hist / float(sum(old_hist)) - \
         pert_hist / float(sum(pert_hist))
-    return sum(diff_hist ** 2)
+    return np.sqrt(sum(diff_hist ** 2))
+
+
+def max_likelihood_count(n, p, q, count):
+    """ given a noisy bit count, estimate the actual bit count """
+    return (est - q * n) / (p - q)
+
+
+def matrix_se(X, n, p, q):
+    """ calculate the standard error of the matrix method """
+    pmat = np.ones((X, X)) * q + np.identity(X) * (p - q)
+    ipmat = np.linalg.inv(pmat)
+    a = ipmat[0, 0]
+    b = ipmat[0, 1]
+
+    # standard error of one cell
+    se = np.sqrt((a**2 + (X - 1) * b**2) * n * p * q)
+    se /= n
+    # expected l2 norm of histogram
+    return np.sqrt(X) * se
+
+
+def mle_se(X, n, p, q):
+    """ calculate the standard error of the MLE method """
+    # standard error of one cell
+    base = X * n * q * (1 - q)
+    extra = n * (p * (1-p) - q * (1-q))
+    total_var = base + extra
+    stderr = np.sqrt(total_var) / ((p - q) * n)
+    return stderr
+
+    se = np.sqrt(var) / (p - q)
+    se /= n
+    # expected l2 norm of histogram
+    return np.sqrt(X) * se
 
 
 def bitvec_test(epsilons, p):
@@ -69,7 +102,8 @@ def bitvec_test(epsilons, p):
                                                 args.sample, p=p)))
     return errs
 
-def equal_synth(epsilons, method='bits'):
+
+def equal_synth(epsilons, method='bits', trials=10):
     if method == 'bits':
         pert_func = perturb_hist_bits
     elif method == 'pram':
@@ -77,11 +111,20 @@ def equal_synth(epsilons, method='bits'):
     elif method == 'gauss':
         pert_func = perturb_hist_gauss
 
-    values = np.random.randint(0, args.cardinality, size=args.n_peers)
     errs = []
+    values = []
+    for t in range(trials):
+        values.append(np.random.randint(0, args.cardinality, size=args.n_peers))
+
     for eps in epsilons:
-        errs.append(l2_error(*pert_func(values, args.cardinality, eps,
-                                        args.sample)))
+        err = 0
+        for vals in values:
+            # pert_func outputs two histograms, and l2_error accepts two
+            # histograms as arguments
+            err += l2_error(*pert_func(vals, args.cardinality, eps,
+                                       args.sample))
+        errs.append(err / trials)
+
     return errs
 
 
@@ -125,24 +168,92 @@ def compare_distributions():
     ax.set_xscale("log")
     ax.set_yscale("log")
     eps = EPSILONS
+    X = args.cardinality
+    N = args.n_peers
     handles = []
     for method in ['bits', 'pram']:
-        even, = ax.plot(eps, equal_synth(eps, method), label=method + '-even')
-        skew, = ax.plot(eps, skewed_synth(eps, method), label=method + '-skew')
-        one, = ax.plot(eps, all_same_synth(eps, method), label=method + '-one')
-        handles += [even, skew, one]
+        if method == 'bits':
+            trials = 10
+        else:
+            trials = 10
+        even, = ax.plot(eps, equal_synth(eps, method, trials=trials),
+                        label=method+'-uniform')
+        #skew, = ax.plot(eps, skewed_synth(eps, method), label=method+'-skew')
+        #one, = ax.plot(eps, all_same_synth(eps, method), label=method+'-one')
+
+        handles += [even] #, skew, one]
+
+    errs = []
+    for e in eps:
+        # bits
+        lam = np.exp(e / 2)
+        p = lam / float(lam + 1)
+        q = 1 / float(lam + 1)
+        errs.append(mle_se(X, N, p, q))
+    mle_bits, = ax.plot(eps, errs, label='mle-bits')
+
+    errs = []
+    for e in eps:
+        # pram
+        lam = np.exp(e)
+        p = lam / float(lam + X - 1)
+        q = 1 / float(lam + X - 1)
+        errs.append(mle_se(X, N, p, q))
+    mle_pram, = ax.plot(eps, errs, label='mle-pram')
+
+    handles += [mle_bits, mle_pram]
 
     plt.legend(handles=handles)
     plt.show()
 
 
-def test_bitvec_ratio():
+def bitvec_ratio_test():
     ax = plt.subplot()
     ax.set_xscale("log")
     ax.set_yscale("log")
     eps = EPSILONS
-    for TODO in TODO:
-        even, = ax.plot(eps, equal_synth(eps, method), label=method + '-even')
+    ps = []
+    for p in ps:
+        legend, = ax.plot(eps, equal_synth(eps, method),
+                          label='p=%.3f, q=%.3f'%(p, q))
+    plt.show()
+
+
+def plot_standard_error():
+    ax = plt.subplot()
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    eps = EPSILONS
+    N = args.n_peers
+    X = args.cardinality
+
+    mle_errs = []
+    mat_errs = []
+    for e in eps:
+        # bits
+        lam = np.exp(e / 2)
+        p = lam / float(lam + 1)
+        q = 1 / float(lam + 1)
+        mle_errs.append(mle_se(X, N, p, q))
+        mat_errs.append(matrix_se(X, N, p, q))
+
+    mle_bits, = ax.plot(eps, mle_errs, label='mle-bits')
+    mat_bits, = ax.plot(eps, mat_errs, label='mat-bits')
+
+    mle_errs = []
+    mat_errs = []
+    for e in eps:
+        # pram
+        lam = np.exp(e)
+        p = lam / float(lam + N - 1)
+        q = 1 / float(lam + N - 1)
+        mle_errs.append(mle_se(X, N, p, q))
+        mat_errs.append(matrix_se(X, N, p, q))
+
+    mle_pram, = ax.plot(eps, mle_errs, label='mle-pram')
+    mat_pram, = ax.plot(eps, mat_errs, label='mat-pram')
+
+    plt.legend(handles=[mle_bits, mat_bits, mle_pram, mat_pram])
     plt.show()
 
 
@@ -180,6 +291,8 @@ def main():
     for test in args.tests:
         if test == 'compare-dist':
             compare_distributions()
+        if test == 'stderr':
+            plot_standard_error()
 
 if __name__ == '__main__':
     global args
