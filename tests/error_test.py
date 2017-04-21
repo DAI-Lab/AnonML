@@ -13,7 +13,7 @@ from anonml.subset_forest import SubsetForest
 from perturb import *
 
 TEST_TYPES = ['synth-random', 'synth-skewed', 'synth-equal', 'synth-all-same',
-              'data', 'compare-dist', 'stderr']
+              'data', 'compare-dist', 'stderr', 'plot-mle']
 
 PERT_TYPES = ['bits', 'pram', 'gauss']
 
@@ -94,6 +94,20 @@ def mle_se(X, n, p, q):
     return np.sqrt(X) * se
 
 
+def plot_mle():
+    for eps in EPSILONS:
+        P = np.arange(0.01, 1, 0.01)
+        y = []
+        lam = np.exp(eps)
+        for p in P:
+            x = p / (lam * (1 - p)) # temp variable for readability
+            q = x / (1 + x)
+            y.append(mle_se(args.cardinality, args.n_peers, p, q))
+        print P[y.index(min(y))], min(y)
+        plt.plot(P, y)
+    plt.show()
+
+
 def bitvec_test(epsilons, p):
     values = np.random.randint(0, args.cardinality, size=args.n_peers)
     errs = []
@@ -102,8 +116,38 @@ def bitvec_test(epsilons, p):
                                                 args.sample, p=p)))
     return errs
 
+def exp_dist(cardinality):
+    """
+    generate a distribution that looks like an exponential curve
+    """
+    p = np.exp2(np.arange(cardinality) * -1).astype(float)
+    return p / float(sum(p))
 
-def equal_synth(epsilons, method='bits', trials=10):
+def skewed_dist(cardinality):
+    """
+    generate a distribution that looks like a triangle
+    roughly p = x / |X|
+    """
+    p = np.arange(1, cardinality + 1).astype(float)
+    return p / float(sum(p))
+
+def flat_dist(cardinality):
+    """
+    generate a distribution where all values are equally likely
+    """
+    return np.ones(cardinality).astype(float) / cardinality
+
+def rand_dist(cardinality):
+    """
+    generate a distribution with random numbers drawn uniformly from [0, 1).
+    """
+    p = np.rand(cardinality)
+    return p / sum(p)
+
+def test_errors(epsilons, dist=None, method='bits', trials=10):
+    """
+    dist: numpy array of probabilities for each category
+    """
     if method == 'bits':
         pert_func = perturb_hist_bits
     elif method == 'pram':
@@ -113,71 +157,44 @@ def equal_synth(epsilons, method='bits', trials=10):
 
     errs = []
     values = []
+
     for t in range(trials):
-        values.append(np.random.randint(0, args.cardinality, size=args.n_peers))
+        values.append(np.random.choice(np.arange(args.cardinality),
+                                       size=args.n_peers, replace=True, p=dist))
 
     for eps in epsilons:
-        err = 0
+        err = []
         for vals in values:
             # pert_func outputs two histograms, and l2_error accepts two
             # histograms as arguments
-            err += l2_error(*pert_func(vals, args.cardinality, eps,
-                                       args.sample))
-        errs.append(err / trials)
+            real, pert = pert_func(vals, args.cardinality, eps, args.sample)
+            err.append(l2_error(real, pert))
+            if err[-1] > 25:
+                pdb.set_trace()
+        errs.append(err)
 
-    return errs
-
-
-def skewed_synth(epsilons, method='bits'):
-    if method == 'bits':
-        pert_func = perturb_hist_bits
-    elif method == 'pram':
-        pert_func = perturb_hist_pram
-    elif method == 'gauss':
-        pert_func = perturb_hist_gauss
-
-    a = np.arange(args.cardinality).astype(float)
-    p = np.arange(1, args.cardinality + 1).astype(float)
-    p /= float(sum(p))
-    values = np.random.choice(a, size=args.n_peers, replace=True, p=p)
-    errs = []
-    for eps in epsilons:
-        errs.append(l2_error(*pert_func(values, args.cardinality, eps,
-                                        args.sample)))
-    return errs
-
-
-def all_same_synth(epsilons, method='bits'):
-    if method == 'bits':
-        pert_func = perturb_hist_bits
-    elif method == 'pram':
-        pert_func = perturb_hist_pram
-    elif method == 'gauss':
-        pert_func = perturb_hist_gauss
-
-    values = np.array([0] * args.n_peers)
-    errs = []
-    for eps in epsilons:
-        errs.append(l2_error(*pert_func(values, args.cardinality, eps,
-                                        args.sample)))
     return errs
 
 
 def compare_distributions():
     ax = plt.subplot()
     ax.set_xscale("log")
-    ax.set_yscale("log")
+    #ax.set_yscale("log")
     eps = EPSILONS
     X = args.cardinality
     N = args.n_peers
     handles = []
     for method in ['bits', 'pram']:
         if method == 'bits':
-            trials = 10
+            trials = 100
         else:
             trials = 10
-        even, = ax.plot(eps, equal_synth(eps, method, trials=trials),
-                        label=method+'-uniform')
+
+        errs = equal_synth(eps, method, trials=trials)
+        avg_err = [np.mean(err) for err in errs]
+        even, = ax.plot(eps, avg_err, label=method+'-uniform')
+        for i, err in enumerate(errs):
+            ax.plot([eps[i]] * trials, err, 'rx' if method == 'pram' else 'bo')
         #skew, = ax.plot(eps, skewed_synth(eps, method), label=method+'-skew')
         #one, = ax.plot(eps, all_same_synth(eps, method), label=method+'-one')
 
@@ -194,6 +211,16 @@ def compare_distributions():
 
     errs = []
     for e in eps:
+        # bits with fixed p
+        lam = np.exp(e)
+        p = 0.5
+        x = p / (lam * (1 - p)) # temp variable for readability
+        q = x / (1 + x)
+        errs.append(mle_se(X, N, p, q))
+    mle_fixp_bits, = ax.plot(eps, errs, label='mle-fixp-bits')
+
+    errs = []
+    for e in eps:
         # pram
         lam = np.exp(e)
         p = lam / float(lam + X - 1)
@@ -201,7 +228,7 @@ def compare_distributions():
         errs.append(mle_se(X, N, p, q))
     mle_pram, = ax.plot(eps, errs, label='mle-pram')
 
-    handles += [mle_bits, mle_pram]
+    handles += [mle_bits, mle_pram, mle_fixp_bits]
 
     plt.legend(handles=handles)
     plt.show()
@@ -293,6 +320,8 @@ def main():
             compare_distributions()
         if test == 'stderr':
             plot_standard_error()
+        if test == 'plot-mle':
+            plot_mle()
 
 if __name__ == '__main__':
     global args

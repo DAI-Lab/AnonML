@@ -49,7 +49,7 @@ def perturb_hist_pram(values, size, epsilon, sample):
     return old_hist, final_hist
 
 
-def perturb_hist_bits(values, size, epsilon, sample, p=None):
+def perturb_hist_bits(values, size, epsilon, sample, p=0.5):
     """
     Perturb each feature subspace separately.
     Each peer sends a bit vector representing the presence or absence of each
