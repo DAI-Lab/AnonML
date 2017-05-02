@@ -79,33 +79,37 @@ def matrix_se(X, n, p, q):
     return np.sqrt(X) * se
 
 
-def mle_se(X, n, p, q):
+def mle_se(m, n, p, q):
     """ calculate the standard error of the MLE method """
     # standard error of one cell
-    base = X * n * q * (1 - q)
+    base = m * n * q * (1 - q)
     extra = n * (p * (1-p) - q * (1-q))
     total_var = base + extra
     stderr = np.sqrt(total_var) / ((p - q) * n)
-    return stderr
 
-    se = np.sqrt(var) / (p - q)
-    se /= n
-    # expected l2 norm of histogram
-    return np.sqrt(X) * se
+    # see paper for details
+    se = np.sqrt(((m - 1) * q * (1 - q) + p * (1 - p)) / n) / (p - q)
+    se = ((m - 1) * q * (1 - q) + p * (1 - p)) / (n * (p - q)**2)
+    return se
 
 
-def plot_mle():
-    for eps in EPSILONS:
-        P = np.arange(0.01, 1, 0.01)
-        y = []
-        lam = np.exp(eps)
-        for p in P:
-            x = p / (lam * (1 - p)) # temp variable for readability
-            q = x / (1 + x)
-            y.append(mle_se(args.cardinality, args.n_peers, p, q))
-        print P[y.index(min(y))], min(y)
-        plt.plot(P, y)
-    plt.show()
+def minimize_error(m, lam):
+    """
+    given m and the lambda parameter, find the optimal p
+    """
+    neg_b = lam**2 + m*lam - lam
+    rad = np.sqrt((m - 1) * lam**3 + (m**2 - 2*m + 2) * lam**2 + (m - 1) * lam)
+    denom = lam**2 - 1
+
+    p1 = (neg_b + rad) / denom
+    p2 = (neg_b - rad) / denom
+
+    if p1 >= 0 and p1 <= 1:
+        return p1
+    elif p2 >= 0 and p2 <= 1:
+        return p2
+    else:
+        print 'Error! No p value found. Found', p1, p2
 
 
 def bitvec_test(epsilons, p):
@@ -115,6 +119,7 @@ def bitvec_test(epsilons, p):
         errs.append(l2_error(*perturb_hist_bits(values, args.cardinality, eps,
                                                 args.sample, p=p)))
     return errs
+
 
 def exp_dist(cardinality):
     """
@@ -176,6 +181,77 @@ def test_errors(epsilons, dist=None, method='bits', trials=10):
     return errs
 
 
+def plot_mle():
+    """
+    Plot the most likely error for for a fixed epsilon, varying p/q.
+    """
+    fig, ax1 = plt.subplots()
+    ax1.set_xlabel('epsilon')
+    ax1.set_ylabel('p')
+    ax2 = ax1.twinx()
+    ax2.set_ylabel('standard error')
+    ax2.set_yscale('log')
+
+    mins = []
+    min_err = []
+    defaults = []
+    def_err = []
+    epsilons = np.arange(0.1, 10, 0.1)
+    Ms = np.arange(2, 1000, 1)
+    m = args.cardinality
+    n = args.n_peers
+    eps = args.epsilon
+
+    #for m in Ms:
+        #x = m       # What we're graphing against
+    for eps in epsilons:
+        x = eps     # what we're graphing against
+
+        # find the minimum according to our sympy-solved solution
+        lam = np.exp(eps)
+        p = minimize_error(m, lam)
+        q = p / (lam * (1 - p) + p)
+        mins.append((x, p))
+        min_err.append((x, mle_se(m, n, p, q)))
+
+        # plot the q = 1-p case for comparison
+        lam = np.exp(eps / 2)
+        p = lam / float(lam + 1)
+        q = 1 / float(lam + 1)
+        defaults.append((x, p))
+        def_err.append((x, mle_se(m, n, p, q)))
+
+    # connect the minimum point on each curve
+    ax1.plot(*zip(*mins))
+    ax1.plot(*zip(*defaults))
+    ax2.plot(*zip(*min_err))
+    ax2.plot(*zip(*def_err))
+
+    plt.show()
+
+
+def calculate_errors(eps, p=None, pram=False):
+    errs = []
+    lam = np.exp(e)
+
+    if p is None and not pram:
+        lam **= 0.5
+
+    for e in eps:
+        # bits with fixed p
+        x = p / (lam * (1 - p)) # temp variable for readability
+        q = x / (1 + x)
+        errs.append(mle_se(X, N, p, q))
+    return errs
+
+    for e in eps:
+        # pram
+        lam = np.exp(e)
+        p = lam / float(lam + X - 1)
+        q = 1 / float(lam + X - 1)
+        errs.append(mle_se(X, N, p, q))
+
+
 def compare_distributions():
     ax = plt.subplot()
     ax.set_xscale("log")
@@ -200,32 +276,6 @@ def compare_distributions():
 
         handles += [even] #, skew, one]
 
-    errs = []
-    for e in eps:
-        # bits
-        lam = np.exp(e / 2)
-        p = lam / float(lam + 1)
-        q = 1 / float(lam + 1)
-        errs.append(mle_se(X, N, p, q))
-    mle_bits, = ax.plot(eps, errs, label='mle-bits')
-
-    errs = []
-    for e in eps:
-        # bits with fixed p
-        lam = np.exp(e)
-        p = 0.5
-        x = p / (lam * (1 - p)) # temp variable for readability
-        q = x / (1 + x)
-        errs.append(mle_se(X, N, p, q))
-    mle_fixp_bits, = ax.plot(eps, errs, label='mle-fixp-bits')
-
-    errs = []
-    for e in eps:
-        # pram
-        lam = np.exp(e)
-        p = lam / float(lam + X - 1)
-        q = 1 / float(lam + X - 1)
-        errs.append(mle_se(X, N, p, q))
     mle_pram, = ax.plot(eps, errs, label='mle-pram')
 
     handles += [mle_bits, mle_pram, mle_fixp_bits]

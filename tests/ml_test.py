@@ -120,7 +120,6 @@ def test_classifier_unit(clf, training_data, X_test, y_test, metrics):
                                                      sum(y_test))
 
     # score the superclassifier
-    # TODO: score per-trial, not per-fold
     results = {}
     for metric in metrics:
         scorer = check_scoring(clf, scoring=metric)
@@ -153,8 +152,9 @@ def test_classifier(classifier, df, y, subsets=None, epsilon=None, n_trials=1,
             # A list of ApplyResult objects, which will eventually hold the
             # results we want. We'll run through the loop spawning processes,
             # then get all the results at the end.
-            res = []
+            fold_results = []
 
+        result = {metric: 0 for metric in ['roc_auc', 'f1', 'accuracy']}
         for train_idx, test_idx in folds:
             # split up data
             X_train, X_test = X[train_idx], X[test_idx]
@@ -182,24 +182,27 @@ def test_classifier(classifier, df, y, subsets=None, epsilon=None, n_trials=1,
             if parallel:
                 # watch out this copies a lot of data between processes
                 mp_args = (clf, training_data, X_test, y_test, results)
-                res.append(pool.apply_async(test_classifier_unit, mp_args))
+                fold_results.append(pool.apply_async(test_classifier_unit, mp_args))
             else:
                 # do serial thing: call the same function but wait for it
-                result = test_classifier_unit(clf, training_data, X_test,
-                                              y_test, results)
-                for met, val in result.items():
-                    results[met].append(val)
+                fold_res = test_classifier_unit(clf, training_data, X_test,
+                                                y_test, results)
+                for met, val in fold_res.items():
+                    result[met] += val
 
         if parallel:
             # collect all the threads
             # there's probably a better way to do this...?
-            for r in res:
-                result = r.get()
-                for met, val in result.items():
-                    results[met].append(val)
+            for r in fold_results:
+                fold_res = r.get()
+                for met, val in fold_res.items():
+                    result[met] += val
 
             pool.close()
             pool.join()
+
+        for met, val in result.items():
+            results[met].append(val / n_folds)
 
     # just making things numpy arrays so we can do stats easier
     np_f1 = np.array(results['f1'])

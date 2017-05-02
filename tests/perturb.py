@@ -1,7 +1,47 @@
 import pandas as pd
 import numpy as np
-import pdb
+import ipdb
 import random
+
+def get_pq(epsilon):
+    """
+    Compute the p and q which minimize expected error for a given epsilon
+
+    epsilon: float
+    """
+
+
+def postprocess_histogram(hist, p, q, N, M):
+    """
+    Transform a histogram with negative entries into one with all natural numbers,
+    suitable for generating a dataset
+
+    hist: np.array() of floats
+    """
+    hist -= q * len(values)
+    hist /= (p - q)
+
+    mean = float(N) / M
+    hist -= mean
+    low = hist.min()
+    hist *= -mean / low
+    hist += mean
+
+    return hist
+
+
+def postprocess_histogram(hist, p, q, N, M):
+    """
+    Transform a histogram with negative entries into one with all natural numbers,
+    suitable for generating a dataset
+
+    hist: np.array() of floats
+    """
+    extra = float(sum(hist) - N) / M
+    hist -= extra
+    return hist
+
+
 
 ###############################################################################
 ##  Perturbation functions  ###################################################
@@ -42,14 +82,12 @@ def perturb_hist_pram(values, size, epsilon, sample):
     #final_hist = np.dot(ipmat, pert_hist)
 
     # MLE of actual counts
-    final_hist = pert_hist - q * len(values)
-    final_hist /= (p - q)
+    final_hist = postprocess_histogram(pert_hist, p, q, len(values), size)
 
-    #return old_hist, pert_hist
     return old_hist, final_hist
 
 
-def perturb_hist_bits(values, size, epsilon, sample, p=0.5):
+def perturb_hist_bits(values, size, epsilon, sample, p=None):
     """
     Perturb each feature subspace separately.
     Each peer sends a bit vector representing the presence or absence of each
@@ -67,6 +105,7 @@ def perturb_hist_bits(values, size, epsilon, sample, p=0.5):
         p = lam / float(lam + 1)
         q = 1 / float(lam + 1)
     else:
+        # we have a fixed p and lambda, and just need to interpret q
         x = p / (lam * (1 - p)) # temp variable for readability
         q = x / (1 + x)
 
@@ -77,11 +116,11 @@ def perturb_hist_bits(values, size, epsilon, sample, p=0.5):
 
     # random response for each row
     for idx in values:
-        # draw a random set of tuples to return
-        myhist = np.random.binomial(1, q, size)
-
         # add to the "real" histogram
         old_hist[idx] += 1
+
+        # draw a random set of tuples to return
+        myhist = np.random.binomial(1, q, size)
 
         # draw one random value for the tuple we actually have
         myhist[idx] = np.random.binomial(1, p)
@@ -89,15 +128,13 @@ def perturb_hist_bits(values, size, epsilon, sample, p=0.5):
             pert_hist += myhist
 
     # generate the perturbation matrix and then find its inverse
-    ## NO BAD ADDS LOTS OF ERROR
+    ## Not doing it for now because it adds too much error
     #pmat = np.ones((size, size)) * q
     #pmat += np.identity(size) * (p - q)
     #ipmat = np.linalg.inv(pmat)
 
-    final_hist = pert_hist - q * len(values)
-    final_hist /= (p - q)
+    final_hist = postprocess_histogram(pert_hist.copy(), p, q, len(values), size)
 
-    #return old_hist, pert_hist
     return old_hist, final_hist
 
 
@@ -131,7 +168,7 @@ def dont_perturb(X, y, subsets):
 
 
 def perturb_histogram(X, y, bin_size, method, epsilon, delta=0, sample=1,
-                      perturb_frac=1, subsets=None):
+                      perturb_frac=1, perm_eps=None, subsets=None):
     """
     Perturb each feature subspace separately.
     This function takes X and y and converts it into a histogram, then passes it
@@ -141,6 +178,7 @@ def perturb_histogram(X, y, bin_size, method, epsilon, delta=0, sample=1,
     X: matrix of real feature data (X[row, column])
     y: array of real labels (y[row])
     method: can be one of 'pram', 'bits', or 'gauss'
+    perm_eps: the epsilon used to permanently perturb the label
 
     Output: dict mapping each subspace to a perturbed (X, y) pair
     """
@@ -148,6 +186,15 @@ def perturb_histogram(X, y, bin_size, method, epsilon, delta=0, sample=1,
 
     if epsilon is None or epsilon == 0:
         return dont_perturb(X, y, subsets)
+
+    # permanently perturb the y-values
+    perm_eps = perm_eps or epsilon
+    pert_frac = 1. / (1 + np.exp(perm_eps))
+    y_pert = y.copy()
+
+    for i in range(len(y)):
+        if np.random() < pert_frac:
+            y_pert[i] = not y[i]
 
     # get the number of possible tuples for a subset
     hsize = lambda subset: 2 * bin_size ** len(subset)
@@ -157,7 +204,7 @@ def perturb_histogram(X, y, bin_size, method, epsilon, delta=0, sample=1,
         res = 0
         for i, v in enumerate(X[row][np.array(subset)]):
             res += bin_size ** i * v
-        return res * 2 + y[row]
+        return res * 2 + y_pert[row]
 
     # convert the histogram index back into a tuple
     def idx_to_tuple(idx, degree):
@@ -177,18 +224,18 @@ def perturb_histogram(X, y, bin_size, method, epsilon, delta=0, sample=1,
         size = hsize(subset)
         categoricals = [hist_idx(subset, row) for row in xrange(X.shape[0])]
 
-        if pert_type == 'pram':
+        if method == 'pram':
             # lambda parameter: each peer's real value is lambda times more likely to be
             # reported than any other value.
             old_hist, pert_hist = perturb_hist_pram(categoricals, size, epsilon,
                                                     sample)
-        elif pert_type == 'bits':
+        elif method == 'bits':
             # lambda parameter: each peer's real value is lambda times more likely to be
             # reported than any other value.
             old_hist, pert_hist = perturb_hist_bits(categoricals, size, epsilon,
                                                     sample)
 
-        elif pert_type == 'gauss':
+        elif method == 'gauss':
             old_hist, pert_hist = perturb_hist_gauss(categoricals, size,
                                                      epsilon, delta)
 
