@@ -1,18 +1,47 @@
 import numpy as np
 import pandas as pd
 
+
+def get_privacy_params(m, eps):
+    """
+    given m and epsilon, find the optimal p and q
+    """
+    lam = np.exp(eps)
+    neg_b = lam**2 + m*lam - lam
+    rad = np.sqrt((m - 1) * lam**3 + (m**2 - 2*m + 2) * lam**2 + (m - 1) * lam)
+    denom = lam**2 - 1
+
+    p1 = (neg_b + rad) / denom
+    p2 = (neg_b - rad) / denom
+
+    if p1 >= 0 and p1 <= 1:
+        p = p1
+    elif p2 >= 0 and p2 <= 1:
+        p = p2
+    else:
+        print 'Error! No p value found. Found', p1, p2
+
+    q = p / (lam * (1 - p) + p)
+    return p, q
+
+
 # accepts bit strings from clients and generates, normalizes histogram
 
 class Aggregator(object):
-    def __init__(self, subsets, bin_size, p_keep, p_change):
+    def __init__(self, subsets, cardinality, n, p, q):
         """
         subsets: list of tuples of column names
-        bin_size: number of bins in each column
+        cardinality: cardinality of each feature
+        n: number of peers in the dataset
+        p: probability a peer will report a '1' honestly
+        q: probability a peer will report a '1' dishonestly
         """
-        self.bin_size = bin_size
         self.subsets = subsets
-        self.p_keep = p_keep
-        self.p_change = p_change
+        self.cardinality = cardinality
+        self.n = n
+        self.p = p
+        self.q = q
+
         self.histograms = {}
         self.X = {}     # subset -> features
         self.y = {}     # subset -> labels
@@ -25,7 +54,7 @@ class Aggregator(object):
 
     def hist_size(self, subset):
         """ get the number of bars a histogram should have """
-        return 2 * self.bin_size ** len(subset)
+        return 2 * self.cardinality ** len(subset)
 
     def index_to_tuple(self, idx, degree):
         """ convert a histogram index back into a tuple """
@@ -33,8 +62,8 @@ class Aggregator(object):
         y = bool(idx % 2)
         idx /= 2
         for _ in range(degree):
-            my_tup.append(idx % bin_size)
-            idx /= bin_size
+            my_tup.append(idx % cardinality)
+            idx /= cardinality
         return my_tup, y
 
     def add_data(self, subset, bits):
@@ -42,17 +71,13 @@ class Aggregator(object):
         self.histograms[tuple(subset)] += np.array(bits).astype(int)
 
     def renormalize_histogram(self, subset):
-        """ renormalize the histogram using the inverse perturbation matrix """
+        """ renormalize the histogram using the maximum likelihood estimate """
         # generate perturbation matrix
-        size = self.hist_size(subset)
-        pmat = np.ones((size, size)) * self.p_change
-        pmat += np.identity(size) * (self.p_keep - self.p_change)
+        new_hist = self.histograms[subset].copy()
+        for i in range(len(new_hist)):
+            new_hist[i] = (new_hist[i] - self.q * self.n) / (self.p - self.q)
 
-        # inverse perturbation matrix
-        ipmat = np.linalg.inv(pmat)
-
-        # linear algebra
-        return np.dot(ipmat, self.histograms[subset])
+        self.histograms[subset] = new_hist
 
     def histogram_to_dataframe(self, subset):
         """

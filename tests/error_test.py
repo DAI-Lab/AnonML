@@ -10,12 +10,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from anonml.subset_forest import SubsetForest
+from anonml.aggregator import get_privacy_params
 from perturb import *
 
-TEST_TYPES = ['synth-random', 'synth-skewed', 'synth-equal', 'synth-all-same',
-              'data', 'compare-dist', 'stderr', 'plot-mle']
+TEST_TYPES = ['compare-dist', 'stderr', 'plot-mle', 'plot-hist']
 
 PERT_TYPES = ['bits', 'pram', 'gauss']
+
+DIST_TYPES = ['random', 'skewed', 'exp', 'flat']
 
 
 ap = argparse.ArgumentParser()
@@ -41,10 +43,12 @@ ap.add_argument('--bin-size', type=int, default=3,
                 help='number of features per generated subset')
 ap.add_argument('--subset-size', type=int, default=3,
                 help='number of features per generated subset')
-ap.add_argument('--num-trials', type=int, default=1,
+ap.add_argument('--n-trials', type=int, default=1,
                 help='number of times to try with different, random subsets')
 
 # options for developing synthetic data
+ap.add_argument('--synth-dist', type=str, choices=DIST_TYPES, default='random',
+                help='distribution from which to draw random data')
 ap.add_argument('--n-peers', type=int, default=10000,
                 help='number of peers to generate data for')
 ap.add_argument('--cardinality', type=int, default=100,
@@ -93,25 +97,6 @@ def mle_se(m, n, p, q):
     return se
 
 
-def minimize_error(m, lam):
-    """
-    given m and the lambda parameter, find the optimal p
-    """
-    neg_b = lam**2 + m*lam - lam
-    rad = np.sqrt((m - 1) * lam**3 + (m**2 - 2*m + 2) * lam**2 + (m - 1) * lam)
-    denom = lam**2 - 1
-
-    p1 = (neg_b + rad) / denom
-    p2 = (neg_b - rad) / denom
-
-    if p1 >= 0 and p1 <= 1:
-        return p1
-    elif p2 >= 0 and p2 <= 1:
-        return p2
-    else:
-        print 'Error! No p value found. Found', p1, p2
-
-
 def bitvec_test(epsilons, p):
     values = np.random.randint(0, args.cardinality, size=args.n_peers)
     errs = []
@@ -146,8 +131,26 @@ def rand_dist(cardinality):
     """
     generate a distribution with random numbers drawn uniformly from [0, 1).
     """
-    p = np.rand(cardinality)
+    p = np.random.rand(cardinality)
     return p / sum(p)
+
+
+def load_data():
+    """
+    required args: data-file, epsilon
+    """
+    df = pd.read_csv(open(args.data_file))
+    labels = df[args.label].values
+    del df[args.label]
+
+    # load subsets if they're there
+    subsets = None
+    if args.subsets:
+        with open(args.subsets) as f:
+            subsets = [[c.strip() for c in l.split(',')] for l in f]
+
+    ## TODO
+
 
 def test_errors(epsilons, dist=None, method='bits', trials=10):
     """
@@ -181,9 +184,79 @@ def test_errors(epsilons, dist=None, method='bits', trials=10):
     return errs
 
 
+def plot_real_vs_est():
+    """
+    Generate a synthetic dataset, simulate perturbation/estimation, and graph
+    the perturbed dataset next to the real one.
+    """
+    method = args.perturb_type
+    dist_type = args.synth_dist
+    eps = args.epsilon
+    m = args.cardinality
+    n = args.n_peers
+    sample = args.sample
+    trials = args.n_trials
+
+    if args.data_file is not None:
+        dist = load_data()
+    elif dist_type == 'skewed':
+        dist = skewed_dist(m)
+    elif dist_type == 'exp':
+        dist = exp_dist(m)
+    elif dist_type == 'flat':
+        dist = flat_dist(m)
+    else:
+        dist = rand_dist(m)
+
+    if method == 'bits':
+        pert_func = perturb_hist_bits
+    elif method == 'pram':
+        pert_func = perturb_hist_pram
+    elif method == 'gauss':
+        pert_func = perturb_hist_gauss
+
+    values = np.random.choice(np.arange(m), size=n, replace=True, p=dist)
+    estimates = []
+    for _ in range(trials):
+        real, pert = pert_func(values, m, eps, sample)
+        estimates.append(pert)
+
+    if trials > 1:
+        estimates = np.array(zip(*estimates))
+        means = estimates.mean(axis=1)
+        errs = estimates.std(axis=1)
+    else:
+        means = estimates[0]
+        errs = np.zeros(len(means))
+
+    plt.style.use('seaborn-deep')
+    fig, ax = plt.subplots()
+    X = np.arange(args.cardinality)
+    width = 0.3
+
+    p, q = get_privacy_params(m, eps)
+
+    # calculate the expected error for each bucket based on real values
+    std_errs = np.zeros(m)
+    for i in range(m):
+        std_errs[i] = (real[i] * p * (1-p) + (n - real[i]) * (1 - q) * q) / \
+            (p - q)**2
+
+    std_errs = np.sqrt(std_errs)
+    real_bars = ax.bar(X, real, width, yerr=std_errs)
+    pert_bars = ax.bar(X + width, means, width, yerr=errs)
+
+    ax.set_ylabel('Count')
+    ax.set_ylabel('Real vs. estimated counts')
+    ax.set_xticks(X + width / 2)
+    ax.set_xticklabels(X)
+    ax.legend((real[0], means[0]), ('Real', 'Estimated'))
+    plt.show()
+
+
 def plot_mle():
     """
-    Plot the most likely error for for a fixed epsilon, varying p/q.
+    Plot the most likely error as a function of m or epsilon
     """
     fig, ax1 = plt.subplots()
     ax1.set_xlabel('epsilon')
@@ -208,9 +281,7 @@ def plot_mle():
         x = eps     # what we're graphing against
 
         # find the minimum according to our sympy-solved solution
-        lam = np.exp(eps)
-        p = minimize_error(m, lam)
-        q = p / (lam * (1 - p) + p)
+        p, q = get_privacy_params(m, eps)
         mins.append((x, p))
         min_err.append((x, mle_se(m, n, p, q)))
 
@@ -334,36 +405,6 @@ def plot_standard_error():
     plt.show()
 
 
-def data_test():
-    """
-    required args: data-file, epsilon
-    """
-    df = pd.read_csv(open(args.data_file))
-    labels = df[args.label].values
-    del df[args.label]
-
-    # load subsets if they're there
-    subsets = None
-    if args.subsets:
-        with open(args.subsets) as f:
-            subsets = [[c.strip() for c in l.split(',')] for l in f]
-
-    # test the silly ensemple
-    clfs, res = test_subset_forest(df=df, labels=labels,
-                                   epsilon=args.epsilon,
-                                   n_trials=args.num_trials,
-                                   n_folds=args.num_folds,
-                                   subset_size=args.subset_size,
-                                   subsets=subsets)
-    print
-    for met, arr in res.items():
-        print met, 'mean: %.3f, stdev: %.3f' % (arr.mean(), arr.std())
-
-    print
-    print 'Top scoring features for best SubsetForest classifier:'
-    best_clf = clfs[0][1]
-    best_clf.print_scores()
-
 def main():
     for test in args.tests:
         if test == 'compare-dist':
@@ -372,6 +413,9 @@ def main():
             plot_standard_error()
         if test == 'plot-mle':
             plot_mle()
+        if test == 'plot-hist':
+            plot_real_vs_est()
+
 
 if __name__ == '__main__':
     global args
