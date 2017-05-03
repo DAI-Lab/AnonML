@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import ipdb
 import random
+from anonml.aggregator import get_privacy_params
 
 
 def postprocess_histogram(hist, p, q, n, m):
@@ -24,7 +25,7 @@ def _postprocess_histogram(hist, p, q, n, m):
 
     hist: np.array() of floats
     """
-    hist -= q * len(values)
+    hist -= q * n
     hist /= (p - q)
 
     mean = float(n) / m
@@ -111,14 +112,7 @@ def perturb_hist_bits(values, m, epsilon, sample, p=None):
     # if q = 1-p, this is p**2 / q**2
     lam = np.exp(epsilon)
 
-    if p is None:
-        lam **= 0.5 # need sqrt of lambda here -- see paper for details
-        p = lam / float(lam + 1)
-        q = 1 / float(lam + 1)
-    else:
-        # we have a fixed p and lambda, and just need to interpret q
-        x = p / (lam * (1 - p)) # temp variable for readability
-        q = x / (1 + x)
+    p, q = get_privacy_params(m, epsilon)
 
     # create two blank histograms: one for the real values, one for the
     # perturbed values
@@ -203,7 +197,7 @@ def perturb_histogram(X, y, cardinality, method, epsilon, delta=0, sample=1,
     y_pert = y.copy()
 
     for i in range(len(y)):
-        if np.random() < pert_frac:
+        if random.random() < pert_frac:
             y_pert[i] = not y[i]
 
     # get the number of possible tuples for a subset

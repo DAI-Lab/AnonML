@@ -61,6 +61,8 @@ ap.add_argument('--num-trials', type=int, default=1,
                 help='number of times to try with different, random subsets')
 ap.add_argument('--num-folds', type=int, default=3,
                 help='number of folds on which to test each classifier')
+ap.add_argument('--num-partitions', type=int, default=1,
+                help='number of ways to partition the dataset')
 
 
 ###############################################################################
@@ -172,7 +174,7 @@ def test_classifier(classifier, df, y, subsets=None, epsilon=None, n_trials=1,
             # perturb data as a histogram
             training_data = perturb_histogram(X=X_train,
                                               y=y_train,
-                                              bin_size=bin_size,
+                                              cardinality=bin_size,
                                               method=args.perturb_type,
                                               epsilon=epsilon,
                                               delta=delta,
@@ -650,7 +652,7 @@ def simple_test():
         with open(args.subsets) as f:
             subsets = [[c.strip() for c in l.split(',')] for l in f]
 
-    # test the silly ensemple
+    # test the silly ensemble
     clfs, res = test_subset_forest(df=df, labels=labels,
                                    epsilon=args.epsilon,
                                    n_trials=args.num_trials,
@@ -682,6 +684,11 @@ def main():
         if test == 'simple':
             simple_test()
 
+
+# TODO: plot p = 1-q vs random response vs optimal p, q
+#   plot measured error vs performance
+#   plot histograms of best decision trees
+#   set up experiments with multiple partitions of the dataset
 
 if __name__ == '__main__':
     global args

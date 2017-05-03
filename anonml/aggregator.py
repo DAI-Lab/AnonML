@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 
-def get_privacy_params(m, eps):
+def _get_privacy_params(m, eps):
     """
     given m and epsilon, find the optimal p and q
     """
@@ -22,6 +22,16 @@ def get_privacy_params(m, eps):
         print 'Error! No p value found. Found', p1, p2
 
     q = p / (lam * (1 - p) + p)
+    return p, q
+
+
+def get_privacy_params(m, eps):
+    """
+    given m and epsilon, find the optimal p and q
+    """
+    lam = np.exp(eps / 2)
+    p = lam / float(lam + 1)
+    q = 1 / float(lam + 1)
     return p, q
 
 
