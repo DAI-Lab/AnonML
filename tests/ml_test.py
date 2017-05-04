@@ -4,6 +4,7 @@ import pdb
 import random
 import itertools
 import multiprocessing as mp
+from collections import defaultdict
 
 import pandas as pd
 import numpy as np
@@ -17,10 +18,10 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.naive_bayes import GaussianNB
-from sklearn.cross_validation import KFold
+from sklearn.model_selection import KFold
 from sklearn.metrics.scorer import check_scoring
 from anonml.subset_forest import SubsetForest
-from perturb import perturb_histogram
+from perturb import perturb_histograms
 
 
 TEST_TYPES = ['compare-classifiers', 'subset-size-datasets',
@@ -51,57 +52,107 @@ ap.add_argument('--perturb-frac', type=float, default=1,
 
 ap.add_argument('--label', type=str, default='dropout',
                 help='label we are trying to predict')
-ap.add_argument('--subsets', type=str, default=None,
-                help='hard-coded subset file')
+ap.add_argument('--subset-file', type=str, default=None,
+                help='hard-coded subsets file')
 ap.add_argument('--subset-size', type=int, default=3,
                 help='number of features per generated subset')
 ap.add_argument('--recursive-subsets', action='store_true',
                 help='generates all subsets that fit inside the largest subset')
 ap.add_argument('--num-trials', type=int, default=1,
                 help='number of times to try with different, random subsets')
-ap.add_argument('--num-folds', type=int, default=3,
+
+# having this default to 4 is nice for parallelism purposes
+ap.add_argument('--num-folds', type=int, default=4,
                 help='number of folds on which to test each classifier')
 ap.add_argument('--num-partitions', type=int, default=1,
                 help='number of ways to partition the dataset')
+ap.add_argument('--parallel', action='store_true', default=False,
+                help='whether to run trials in parallel')
 
 
 ###############################################################################
 ##  Misc helper functions  ####################################################
 ###############################################################################
 
-def generate_subsets(df, subset_size):
+def generate_subspaces(df, subset_size, n_parts=1):
     """
-    Generate n_subsets random, non-overlapping subsets of subset_size columns each
+    Generate random, non-overlapping subsets of subset_size columns each
     Subsets are lists of column names (strings)
+
+    subset_size (int): number of columns to include in each subset
+    n_parts (int): number of different sets of subsets to generate
     """
-    shuf_cols = list(df.columns)
-    random.shuffle(shuf_cols)
-    subsets = []
+    subspaces = {}
 
-    while len(shuf_cols):
-        cols = shuf_cols[:subset_size]
-        shuf_cols = shuf_cols[subset_size:]
+    # do k folds of the data, and use each one as a partition
+    for i in range(n_parts):
+        subspaces[i] = []
+        shuf_cols = range(len(df.columns))
+        random.shuffle(shuf_cols)
 
-        subsets.append(cols)
-        if args.recursive_subsets:
-            for j in range(1, subset_size):
-                for c in itertools.combinations(cols, j):
-                    subsets.append(c)
+        while len(shuf_cols):
+            # pop off the first subset_size columns and add to the list
+            subspaces[i].append(tuple(shuf_cols[:subset_size]))
+            shuf_cols = shuf_cols[subset_size:]
 
-    return subsets
+    return subspaces
+
+
+def load_subsets(path):
+    if path is not None:
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except:
+            print "Could not open subset file at", path
+    return None
 
 
 ###############################################################################
 ##  Test helper functions  ####################################################
 ###############################################################################
 
-def test_classifier_unit(clf, training_data, X_test, y_test, metrics):
+def test_classifier_once(classifier, kwargs, train_idx, test_idx, metrics,
+                         subsets=None, perturb_type=None, epsilon=None):
     """
     Test a classifier on a single test/train fold, and store the results in the
     "results" dict. Can be used in parallel.
     """
-    # fit to the training set
-    clf.fit(training_data)
+    # initialize a new classifier
+    clf = classifier(**kwargs)
+
+    # split up data
+    X, y = global_X, global_y
+    X_train, X_test = X[train_idx], X[test_idx]
+    y_train, y_test = y[train_idx], y[test_idx]
+
+    if subsets is None:
+        # if we're using the whole dataset, go right ahead
+        clf.fit(X_train, y_train)
+    else:
+        # using subsets:
+        # we need to perturb the data first
+        # find the binning factor of this matrix
+        # TODO: should be a parameter, not discovered like this
+        num_bins = max([max(X[:,i]) - min(X[:,i]) for i in
+                        range(X.shape[1])]) + 1
+
+        # TODO: is this a good way to set delta? (no)
+        #       ... is there a good way to set delta?
+        delta = np.exp(-float(X_train.shape[0]) / 100)
+
+        # perturb data as a bunch of histograms
+        training_data = perturb_histograms(X=X_train,
+                                           y=y_train,
+                                           cardinality=num_bins,
+                                           method=perturb_type,
+                                           epsilon=epsilon,
+                                           delta=delta,
+                                           subsets=subsets)
+
+        # fit to the training set
+        # this function call will only work for SubsetForests
+        clf.fit(training_data)
 
     # see what the model predicts for the test set
     y_pred = clf.predict(X_test)
@@ -127,11 +178,14 @@ def test_classifier_unit(clf, training_data, X_test, y_test, metrics):
         scorer = check_scoring(clf, scoring=metric)
         results[metric] = scorer(clf, X_test, y_test)
 
+    with open('done.txt', 'w') as f:
+        f.write('Done!')
+
     return results
 
 
 def test_classifier(classifier, df, y, subsets=None, epsilon=None, n_trials=1,
-                    n_folds=5, parallel=False, **kwargs):
+                    n_folds=4, **kwargs):
     """
     Run the given classifier with the given epsilon for n_folds tests, and
     return the results.
@@ -140,59 +194,57 @@ def test_classifier(classifier, df, y, subsets=None, epsilon=None, n_trials=1,
     """
     X = np.nan_to_num(df.as_matrix())
     y = np.array(y).astype('bool')
-    clf = classifier(**kwargs)
 
-    results = {metric: [] for metric in ['roc_auc', 'f1', 'accuracy']}
+    # for each metric, a list of results
+    metrics = ['roc_auc', 'f1', 'accuracy']
+    results = {metric: [] for metric in metrics}
 
-    if parallel:
+    global global_X, global_y
+    global_X = X
+    global_y = y
+
+    if args.verbose >= 1:
+        print 'testing %d folds of %d samples' % (n_folds, len(y))
+
+    if args.parallel:
         pool = mp.Pool(processes=4)
 
     for i in range(n_trials):
-        # generate n_folds partitions of the data
-        folds = KFold(y.shape[0], n_folds=n_folds, shuffle=True)
-        if parallel:
+        # generate n_folds subsets of the data
+        folds = KFold(n_splits=n_folds, shuffle=True).split(X)
+        if args.parallel:
             # A list of ApplyResult objects, which will eventually hold the
             # results we want. We'll run through the loop spawning processes,
             # then get all the results at the end.
             fold_results = []
 
-        result = {metric: 0 for metric in ['roc_auc', 'f1', 'accuracy']}
-        for train_idx, test_idx in folds:
-            # split up data
-            X_train, X_test = X[train_idx], X[test_idx]
-            y_train, y_test = y[train_idx], y[test_idx]
+        # a single set of results, metric name -> score
+        result = {metric: 0 for metric in metrics}
+        for train_ix, test_ix in folds:
+            if args.parallel:
+                if subsets:
+                    # send extra args
+                    mp_args = (classifier, kwargs, train_ix, test_ix, metrics,
+                               subsets, args.perturb_type, epsilon)
+                else:
+                    # just the basics
+                    mp_args = (classifier, kwargs, train_ix, test_ix, metrics)
 
-            # find the binning factor of this matrix
-            # TODO: should be a parameter, not discovered like this
-            bin_size = max([max(X[:,i]) - min(X[:,i]) for i in
-                            range(X.shape[1])]) + 1
+                # watch out this might copy a lot of data between processes
+                apply_result = pool.apply_async(test_classifier_once, mp_args)
+                fold_results.append(apply_result)
 
-            # TODO: is this a good way to set delta? (no)
-            #       ... is there a good way to set delta?
-            delta = np.exp(-float(X_train.shape[0]) / 100)
-
-            # perturb data as a histogram
-            training_data = perturb_histogram(X=X_train,
-                                              y=y_train,
-                                              cardinality=bin_size,
-                                              method=args.perturb_type,
-                                              epsilon=epsilon,
-                                              delta=delta,
-                                              subsets=subsets)
-
-            # do parallel thing
-            if parallel:
-                # watch out this copies a lot of data between processes
-                mp_args = (clf, training_data, X_test, y_test, results)
-                fold_results.append(pool.apply_async(test_classifier_unit, mp_args))
             else:
                 # do serial thing: call the same function but wait for it
-                fold_res = test_classifier_unit(clf, training_data, X_test,
-                                                y_test, results)
+                fold_res = test_classifier_once(classifier, kwargs, train_ix,
+                                                test_ix, metrics,
+                                                subsets=subsets,
+                                                perturb_type=args.perturb_type,
+                                                epsilon=epsilon)
                 for met, val in fold_res.items():
                     result[met] += val
 
-        if parallel:
+        if args.parallel:
             # collect all the threads
             # there's probably a better way to do this...?
             for r in fold_results:
@@ -203,6 +255,8 @@ def test_classifier(classifier, df, y, subsets=None, epsilon=None, n_trials=1,
             pool.close()
             pool.join()
 
+        # each value is the sum of n_folds scores, so divide each value by
+        # the number of folds and append it to the results list
         for met, val in result.items():
             results[met].append(val / n_folds)
 
@@ -221,20 +275,12 @@ def test_classifier(classifier, df, y, subsets=None, epsilon=None, n_trials=1,
         print '\tAccuracy: mean = %f, std = %f, (%.3f, %.3f)' % \
             (np_acc.mean(), np_acc.std(), np_acc.min(), np_acc.max())
 
-    return clf, {'f1': np_f1, 'auc': np_auc, 'acc': np_acc}
+    return {'f1': np_f1, 'auc': np_auc, 'acc': np_acc}
 
 
-def test_subset_forest(df, labels, epsilon=0, n_trials=1, n_folds=5,
-                       subset_size=3, subsets=None, parallel=False):
-    subsets = subsets or generate_subsets(df, subset_size)
-    subsets_ix = []
-    cols = {}
-
-    # subsets: map column names to indices
-    for subset in subsets:
-        subsets_ix.append(tuple([df.columns.get_loc(c) for c in subset]))
-        cols[subsets_ix[-1]] = subset
-
+def test_subset_forest(df, labels, epsilon=0, n_trials=1, n_folds=4,
+                       subset_size=3, subsets=None, n_parts=1):
+    # map of metric names to arrays of scores (one set for each trial)
     results = {met: np.ndarray(0) for met in ['f1', 'auc', 'acc']}
     classifiers = []
 
@@ -242,40 +288,24 @@ def test_subset_forest(df, labels, epsilon=0, n_trials=1, n_folds=5,
     # This function exists because test_classifier does not have the ability to
     # generate a fresh set of subsets between trials.
     for i in range(n_trials):
-        clf, res = test_classifier(classifier=SubsetForest, df=df,
-                                   y=labels, subsets=subsets_ix, epsilon=epsilon,
-                                   n_folds=n_folds, cols=cols)
+        # generate subsets if necessary
+        subsets = subsets or generate_subspaces(df, subset_size, n_parts)
+
+        # test the classifier on this set of subsets
+        res = test_classifier(classifier=SubsetForest,
+                              df=df,
+                              y=labels,
+                              # the next function takes subsets as idxs
+                              subsets=subsets,
+                              epsilon=epsilon,
+                              n_folds=n_folds,
+                              cols=list(df.columns))
 
         # save results in the dictionary, by metric.
         for met, arr in res.items():
             results[met] = np.append(results[met], arr)
 
-        # at the end, we'll sort classifiers by AUC score.
-        classifiers.append((res['auc'].mean(), clf))
-        subsets = generate_subsets(df, subset_size)
-
-    return sorted(classifiers)[::-1], results
-
-
-def test_epsilon(df, labels, x, subsets, n_folds):
-    """
-    Calculate the performance of a classifier for every epsilon in the array x
-    """
-    y = []
-    yerr = []
-
-    for eps in x:
-        clf, res = test_classifier(classifier=SubsetForest, df=df,
-                                   y=labels, subsets=subsets, epsilon=eps,
-                                   n_folds=n_folds)
-        mean = res['auc'].mean()
-        std = res['auc'].std()
-        y.append(mean)
-        yerr.append(std)
-        if args.verbose >= 1:
-            print 'epsilon = %.3f: %.3f (+- %.3f)' % (eps, mean, std)
-
-    return y, yerr
+    return results
 
 
 ###############################################################################
@@ -290,11 +320,8 @@ def compare_classifiers():
     labels = df[args.label].values
     del df[args.label]
 
-    # load subsets if they're there
-    subsets = None
-    if args.subsets:
-        with open(args.subsets) as f:
-            subsets = [[c.strip() for c in l.split(',')] for l in f]
+    # load subset data if they're there
+    subsets = load_subsets(args.subset_file)
 
     # save all our data in a dataframe that we can to_csv later.
     columns = []
@@ -307,24 +334,16 @@ def compare_classifiers():
     scores = pd.DataFrame(index=classifiers, columns=columns)
 
     # test our weird whatever
-    clfs, res = test_subset_forest(df=df, labels=labels,
-                                   epsilon=args.epsilon,
-                                   n_trials=args.num_trials,
-                                   n_folds=args.num_folds,
-                                   subset_size=args.subset_size,
-                                   subsets=subsets)
+    res = test_subset_forest(df=df, labels=labels,
+                             epsilon=args.epsilon,
+                             n_trials=args.num_trials,
+                             n_folds=args.num_folds,
+                             subset_size=args.subset_size,
+                             subsets=subsets,
+                             n_parts=args.num_partitions)
     for met, arr in res.items():
         scores.set_value('subset-forest', met + '-mean', arr.mean())
         scores.set_value('subset-forest', met + '-std', arr.std())
-
-    print
-    print 'Top scoring features for best SubsetForest classifier:'
-    best_clf = clfs[0][1]
-    best_clf.print_scores()
-
-    with open('last-features.txt', 'w') as f:
-        for ss, cols in best_clf.cols.iteritems():
-            f.write(','.join(cols) + '\n')
 
     # random forest
     _, res = test_classifier(classifier=RandomForestClassifier, df=df,
@@ -382,7 +401,8 @@ def plot_subset_size_datasets():
         yerr = []
         for subset_size in x:
             _, res = test_subset_forest(df=df, labels=labels,
-                                        subset_size=subset_size, epsilon=0,
+                                        subset_size=subset_size,
+                                        epsilon=0,
                                         n_trials=args.num_trials,
                                         n_folds=args.num_folds)
 
@@ -440,19 +460,15 @@ def plot_perturbation_subset_size():
             print '\ttesting subspace permutation %d/%d, %d folds each' % \
                 (i+1, n_trials, n_folds)
 
-            subsets = generate_subsets(df, -1, subset_size)
-            subsets_ix = []
-            cols = {}
-            # subsets: map column names to indices
-            for subset in subsets:
-                subsets_ix.append(tuple([df.columns.get_loc(c) for c in subset]))
-                cols[subsets_ix[-1]] = subset
-
+            subsets = generate_subspaces(df, subset_size, args.num_partitions)
             for eps in x:
-                _, res = test_classifier(classifier=SubsetForest, df=df,
-                                         y=labels, subsets=subsets_ix,
-                                         epsilon=eps, n_folds=n_folds,
-                                         cols=cols)
+                res = test_classifier(classifier=SubsetForest,
+                                      df=df,
+                                      y=labels,
+                                      subsets=subsets,
+                                      epsilon=eps,
+                                      n_folds=n_folds,
+                                      cols=list(df.columns))
                 start = i * n_folds
                 end = (i + 1) * n_folds - 1
                 results.ix[start:end, eps] = res['auc']
@@ -518,23 +534,19 @@ def plot_perturbation_datasets():
                 (i+1, n_trials, name, n_folds)
 
             # generate new set of subsets
-            subsets = generate_subsets(df, args.subset_size)
-            subsets_ix = []
-            cols = {}
-
-            # map column names to indices
-            for subset in subsets:
-                subsets_ix.append(tuple([df.columns.get_loc(c) for c in subset]))
-                cols[subsets_ix[-1]] = subset
-
+            subsets = generate_subspaces(df, args.subset_size,
+                                         args.num_partitions)
             for eps in x:
                 if args.verbose >= 1:
                     print
                     print 'epsilon =', eps
-                _, res = test_classifier(classifier=SubsetForest, df=df,
-                                         y=labels, subsets=subsets_ix,
-                                         epsilon=eps, n_folds=n_folds,
-                                         cols=cols)
+                res = test_classifier(classifier=SubsetForest,
+                                      df=df,
+                                      y=labels,
+                                      subsets=subsets,
+                                      epsilon=eps,
+                                      n_folds=n_folds,
+                                      cols=list(df.columns))
                 start = i * n_folds
                 end = (i + 1) * n_folds - 1
                 results.ix[start:end, eps] = res['auc']
@@ -569,7 +581,7 @@ def plot_perturbation_datasets():
 
 def plot_binning_datasets():
     """
-    Plot performance of a few different datasets across a number of bin sizes
+    Plot performance of a few different datasets with different numbers of bins
     """
     files = [
         ('edx/3091x_f12/features-wk10-ld4%s.csv', 'dropout', 'r', '3091x'),
@@ -581,10 +593,7 @@ def plot_binning_datasets():
     scores = pd.DataFrame(index=x, columns=[f[-1] + '-mean' for f in files] +
                                            [f[-1] + '-std' for f in files])
 
-    baboon_subsets = []
-    with open('baboon_mating/subsets.txt') as f:
-        for l in f:
-            baboon_subsets.append([c.strip() for c in l.split(',')])
+    baboon_subsets = load_subsets('baboon_mating/subsets.txt')
 
     for f, label, fmt, name in files:
         subsets = None
@@ -597,8 +606,8 @@ def plot_binning_datasets():
 
         y = []
         yerr = []
-        for bin_size in x:
-            extra = '-b%d' % bin_size if bin_size else ''
+        for num_bins in x:
+            extra = '-b%d' % num_bins if num_bins else ''
 
             # load in the data frame for the binned features
             df = pd.read_csv(f % extra)
@@ -608,20 +617,22 @@ def plot_binning_datasets():
             print 'loaded dataset', f % extra
 
             if not subsets:
-                subsets = generate_subsets(df, -1, args.subset_size)
+                subsets = generate_subspaces(df, args.subset_size,
+                                             args.num_partitions)
 
             _, res = test_subset_forest(df=df, labels=labels,
                                         n_trials=args.num_trials,
                                         n_folds=args.num_folds,
                                         subset_size=args.subset_size,
-                                        subsets=subsets, epsilon=0)
+                                        subsets=subsets,
+                                        epsilon=0)
             mean = res['auc'].mean()
             std = res['auc'].std()
             y.append(mean)
             yerr.append(std)
 
-            scores.set_value(bin_size, name + '-mean', mean)
-            scores.set_value(bin_size, name + '-std', std)
+            scores.set_value(num_bins, name + '-mean', mean)
+            scores.set_value(num_bins, name + '-std', std)
 
         if args.plot:
             plt.errorbar(x, y, yerr=yerr, fmt=fmt)
@@ -646,27 +657,20 @@ def simple_test():
     labels = df[args.label].values
     del df[args.label]
 
-    # load subsets if they're there
-    subsets = None
-    if args.subsets:
-        with open(args.subsets) as f:
-            subsets = [[c.strip() for c in l.split(',')] for l in f]
+    # load partitions/subsets if they're there
+    subsets = load_subsets(args.subset_file)
 
     # test the silly ensemble
-    clfs, res = test_subset_forest(df=df, labels=labels,
-                                   epsilon=args.epsilon,
-                                   n_trials=args.num_trials,
-                                   n_folds=args.num_folds,
-                                   subset_size=args.subset_size,
-                                   subsets=subsets)
+    res = test_subset_forest(df=df, labels=labels,
+                             epsilon=args.epsilon,
+                             n_trials=args.num_trials,
+                             n_folds=args.num_folds,
+                             subset_size=args.subset_size,
+                             subsets=subsets,
+                             n_parts=args.num_partitions)
     print
     for met, arr in res.items():
         print met, 'mean: %.3f, stdev: %.3f' % (arr.mean(), arr.std())
-
-    print
-    print 'Top scoring features for best SubsetForest classifier:'
-    best_clf = clfs[0][1]
-    best_clf.print_scores()
 
 
 def main():

@@ -1,8 +1,9 @@
 import pandas as pd
 import numpy as np
-import ipdb
+import pdb
 import random
 from anonml.aggregator import get_privacy_params
+from sklearn.model_selection import KFold
 
 
 def postprocess_histogram(hist, p, q, n, m):
@@ -165,15 +166,26 @@ def perturb_hist_gauss(values, m, epsilon, delta):
     return old_hist, pert_hist
 
 
+def generate_partitions(X, n_parts):
+    """ generate partitions of a matrix """
+    if n_parts > 1:
+        folds = KFold(n_splits=n_parts, shuffle=True).split(X)
+        return {i: train_ix for i, (_, train_ix) in enumerate(folds)}
+    else:
+        return {0: np.arange(X.shape[0])}
+
+
 def dont_perturb(X, y, subsets):
     output = {}
-    for subset in subsets:
-        output[subset] = X[:, np.array(subset)], y.copy()
+    for i, sets in subsets.items():
+        indices = generate_partitions(X, len(subsets))
+        for subset in sets:
+            output[subset] = X[indices, np.array(subset)], y[indices]
     return output
 
 
-def perturb_histogram(X, y, cardinality, method, epsilon, delta=0, sample=1,
-                      perturb_frac=1, perm_eps=None, subsets=None):
+def perturb_histograms(X, y, cardinality, method, epsilon, delta=0, sample=1,
+                       perturb_frac=1, perm_eps=None, subsets=None):
     """
     Perturb each feature subspace separately.
     This function takes X and y and converts it into a histogram, then passes it
@@ -223,69 +235,48 @@ def perturb_histogram(X, y, cardinality, method, epsilon, delta=0, sample=1,
     # array of l2-norm errors
     errs = []
 
+    # partitions of the feature matrix
+    folds = generate_partitions(X, len(subsets))
+
     # iterate over subsets on the outside
-    for subset in subsets:
-        m = hsize(subset)
-        categoricals = [hist_idx(subset, row) for row in xrange(X.shape[0])]
+    for i, sets in subsets.items():
+        indices = folds[i]
+        for subset in sets:
+            m = hsize(subset)
+            categoricals = [hist_idx(subset, row) for row in indices]
 
-        if method == 'pram':
-            # lambda parameter: each peer's real value is lambda times more likely to be
-            # reported than any other value.
-            old_hist, pert_hist = perturb_hist_pram(categoricals, m, epsilon,
-                                                    sample)
-        elif method == 'bits':
-            # lambda parameter: each peer's real value is lambda times more likely to be
-            # reported than any other value.
-            old_hist, pert_hist = perturb_hist_bits(categoricals, m, epsilon,
-                                                    sample)
+            if method == 'pram':
+                # lambda parameter: each peer's real value is lambda times more
+                # likely to be reported than any other value.
+                old_hist, pert_hist = perturb_hist_pram(categoricals, m,
+                                                        epsilon, sample)
+            elif method == 'bits':
+                # lambda parameter: each peer's real value is lambda times more
+                # likely to be reported than any other value.
+                old_hist, pert_hist = perturb_hist_bits(categoricals, m,
+                                                        epsilon, sample)
 
-        elif method == 'gauss':
-            old_hist, pert_hist = perturb_hist_gauss(categoricals, m,
-                                                     epsilon, delta)
+            elif method == 'gauss':
+                old_hist, pert_hist = perturb_hist_gauss(categoricals, m,
+                                                         epsilon, delta)
 
-        pert_tuples = []    # covariate rows
-        labels = []         # label data
+            pert_tuples = []    # covariate rows
+            labels = []         # label data
 
-        # convert the histogram into a list of rows
-        for i, num in enumerate(pert_hist):
-            # map histogram index back to tuple
-            tup, label = idx_to_tuple(i, len(subset))
+            # convert the histogram into a list of rows
+            for i, num in enumerate(pert_hist):
+                # map histogram index back to tuple
+                tup, label = idx_to_tuple(i, len(subset))
 
-            # round floats to ints, and add that many of the tuple
-            # TODO: look into linear programming/other solutions to this
-            num = int(round(num))
-            pert_tuples += num * [tup]
-            labels += num * [label]
+                # round floats to ints, and add that many of the tuple
+                # TODO: look into linear programming/other solutions to this
+                num = int(round(num))
+                pert_tuples += num * [tup]
+                labels += num * [label]
 
-        # aand back into a matrix
-        out_X = pd.DataFrame(pert_tuples, columns=subset).as_matrix()
-        out_y = np.array(labels)
-        output[subset] = out_X, out_y
+            # aand back into a matrix
+            out_X = pd.DataFrame(pert_tuples, columns=subset).as_matrix()
+            out_y = np.array(labels)
+            output[subset] = out_X, out_y
 
     return output
-
-
-def perturb_dataframe(df, epsilon, subsets=None):
-    """
-    Perturb a whole dataframe at once. Consistency.
-    For each row in the dataframe, for each subset of that row, randomly perturb
-    all the values of that subset. Subsets must be non-overlapping.
-
-    Input: dataframe of real data
-    Output: dataframe of perturbed data
-    """
-    perturbation = np.exp(epsilon)
-    if subsets is None:
-        subsets = [[i] for i in df.columns]
-
-    ndf = df.copy()
-    index = df.index.to_series()
-    for cols in subsets:
-        # grab a random sample of indices to perturb
-        ix = index.sample(frac=perturbation)
-
-        # perturb the value in each column
-        for col in cols:
-            ndf.ix[ix, col] = np.random.choice(df[col], m=len(ix))
-
-    return ndf
