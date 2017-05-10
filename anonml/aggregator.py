@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 
-def _get_privacy_params(m, eps):
+def get_privacy_params(m, eps):
     """
     given m and epsilon, find the optimal p and q
     """
@@ -25,7 +25,7 @@ def _get_privacy_params(m, eps):
     return p, q
 
 
-def get_privacy_params(m, eps):
+def get_rappor_params(m, eps):
     """
     given m and epsilon, find the optimal p and q
     """

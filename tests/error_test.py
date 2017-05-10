@@ -10,10 +10,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from anonml.subset_forest import SubsetForest
-from anonml.aggregator import get_privacy_params
+from anonml.aggregator import get_privacy_params, get_rappor_params
 from perturb import *
 
-TEST_TYPES = ['compare-dist', 'stderr', 'plot-mle', 'plot-hist']
+TEST_TYPES = ['compare-dist', 'stderr', 'expected-err', 'plot-hist']
 
 PERT_TYPES = ['bits', 'pram', 'gauss']
 
@@ -254,17 +254,10 @@ def plot_real_vs_est():
     plt.show()
 
 
-def plot_mle():
+def plot_expected_error(by='m'):
     """
-    Plot the most likely error as a function of m or epsilon
+    Plot the expected error as a function of m or epsilon
     """
-    fig, ax1 = plt.subplots()
-    ax1.set_xlabel('epsilon')
-    ax1.set_ylabel('p')
-    ax2 = ax1.twinx()
-    ax2.set_ylabel('standard error')
-    ax2.set_yscale('log')
-
     mins = []
     min_err = []
     defaults = []
@@ -275,10 +268,16 @@ def plot_mle():
     n = args.n_peers
     eps = args.epsilon
 
-    #for m in Ms:
-        #x = m       # What we're graphing against
-    for eps in epsilons:
-        x = eps     # what we're graphing against
+    if by == 'm':
+        X = Ms
+    elif by == 'epsilon':
+        X = epsilons
+
+    for x in X:
+        if by == 'm':
+            m = x
+        elif by == 'epsilon':
+            eps = x
 
         # find the minimum according to our sympy-solved solution
         p, q = get_privacy_params(m, eps)
@@ -286,15 +285,24 @@ def plot_mle():
         min_err.append((x, mle_se(m, n, p, q)))
 
         # plot the q = 1-p case for comparison
-        lam = np.exp(eps / 2)
-        p = lam / float(lam + 1)
-        q = 1 / float(lam + 1)
+        p, q = get_rappor_params(m, eps)
         defaults.append((x, p))
         def_err.append((x, mle_se(m, n, p, q)))
 
     # connect the minimum point on each curve
+    fig, ax1 = plt.subplots()
+    ax1.set_xlabel('epsilon')
+    ax1.set_ylabel('p')
+
     ax1.plot(*zip(*mins))
     ax1.plot(*zip(*defaults))
+    plt.show()
+
+    fig, ax2 = plt.subplots()
+    ax2.set_xlabel(by)
+    ax2.set_ylabel('standard error')
+    ax2.set_yscale('log')
+
     ax2.plot(*zip(*min_err))
     ax2.plot(*zip(*def_err))
 
@@ -411,8 +419,8 @@ def main():
             compare_distributions()
         if test == 'stderr':
             plot_standard_error()
-        if test == 'plot-mle':
-            plot_mle()
+        if test == 'expected-err':
+            plot_expected_error()
         if test == 'plot-hist':
             plot_real_vs_est()
 

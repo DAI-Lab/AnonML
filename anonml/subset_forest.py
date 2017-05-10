@@ -42,7 +42,7 @@ class SubsetForest(ForestClassifier):
     a single model
     """
     def __init__(self, tree_metric='f1', n_folds=3, cols=None,
-                 verbose=False):
+                 max_tree_depth=None, verbose=False):
         """
         tree_metric (str): One of ('f1', 'auc', 'acc'). Determines which score
             is used to order the decision trees
@@ -53,6 +53,7 @@ class SubsetForest(ForestClassifier):
         self._estimator_type = 'classifier'
         self.n_outputs_ = 1
         self.cols = cols
+        self.max_tree_depth = max_tree_depth
         self.verbose = verbose
         self.tree_metric = tree_metric
         self.n_folds = n_folds
@@ -107,7 +108,8 @@ class SubsetForest(ForestClassifier):
                 y_train, y_test = y[train_index], y[test_index]
 
                 # create new decision tree classifier
-                tree = sktree.DecisionTreeClassifier(class_weight='balanced')
+                tree = sktree.DecisionTreeClassifier(class_weight='balanced',
+                                                     max_depth=self.max_tree_depth)
                 tree.fit(X_train, y_train)
 
                 # cross-validate this tree

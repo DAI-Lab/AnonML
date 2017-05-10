@@ -176,11 +176,16 @@ def generate_partitions(X, n_parts):
 
 
 def dont_perturb(X, y, subsets):
+    """
+    Generate unperturbed data subsets in the same format as perturb_histograms()
+    """
     output = {}
+    folds = generate_partitions(X, len(subsets))
     for i, sets in subsets.items():
-        indices = generate_partitions(X, len(subsets))
+        rows = folds[i]
         for subset in sets:
-            output[subset] = X[indices, np.array(subset)], y[indices]
+            indexer = np.ix_(rows, subset)
+            output[subset] = X[indexer], y[rows]
     return output
 
 
@@ -240,10 +245,10 @@ def perturb_histograms(X, y, cardinality, method, epsilon, delta=0, sample=1,
 
     # iterate over subsets on the outside
     for i, sets in subsets.items():
-        indices = folds[i]
+        rows = folds[i]
         for subset in sets:
             m = hsize(subset)
-            categoricals = [hist_idx(subset, row) for row in indices]
+            categoricals = [hist_idx(subset, row) for row in rows]
 
             if method == 'pram':
                 # lambda parameter: each peer's real value is lambda times more
@@ -275,7 +280,7 @@ def perturb_histograms(X, y, cardinality, method, epsilon, delta=0, sample=1,
                 labels += num * [label]
 
             # aand back into a matrix
-            out_X = pd.DataFrame(pert_tuples, columns=subset).as_matrix()
+            out_X = np.array(pert_tuples)
             out_y = np.array(labels)
             output[subset] = out_X, out_y
 

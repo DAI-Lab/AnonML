@@ -504,12 +504,12 @@ def plot_perturbation_datasets():
     Plot performance of a few different datasets by perturbation
     """
     files = [
-        ('baboon_mating/features-b5.csv', 'consort', 'g', 'baboon-mating'),
         ('edx/3091x_f12/features-wk10-ld4-b5.csv', 'dropout', 'r', '3091x'),
         ('edx/6002x_f12/features-wk10-ld4-b5.csv', 'dropout', 'b', '6002x'),
+        ('baboon_mating/features-b5.csv', 'consort', 'g', 'baboon-mating'),
         ('gender/free-sample-b5.csv', 'class', 'k', 'gender'),
     ]
-    x = [10 ** (i/10.0) for i in range(-10, 5)]
+    x = [np.log(i) for i in np.arange(2, 16)]
     scores = pd.DataFrame(index=x, columns=[f[-1] + '-mean' for f in files] +
                                            [f[-1] + '-std' for f in files])
 
@@ -540,6 +540,7 @@ def plot_perturbation_datasets():
                 if args.verbose >= 1:
                     print
                     print 'epsilon =', eps
+
                 res = test_classifier(classifier=SubsetForest,
                                       df=df,
                                       y=labels,
@@ -553,7 +554,6 @@ def plot_perturbation_datasets():
                 if args.verbose >= 1:
                     print '\te = %.2f: %.3f (+- %.3f)' % (eps, res['auc'].mean(),
                                                           res['auc'].std())
-
 
         print '%s results:' % name
         # aggregate the scores for each trial
@@ -572,10 +572,10 @@ def plot_perturbation_datasets():
         scores.to_csv(f)
 
     if args.plot:
-        plt.axis([0.0, 1.0, 0.5, 1.0])
-        plt.xlabel('perturbation')
+        plt.axis([0.0, 2.5, 0.5, 1.0])
+        plt.xlabel('epsilon')
         plt.ylabel('roc_auc')
-        plt.title('AUC vs. Perturbation, with Standard Deviation Error')
+        plt.title('AUC vs. Epsilon, with Standard Deviation Error')
         plt.show()
 
 
