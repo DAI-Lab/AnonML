@@ -108,6 +108,24 @@ def load_subsets(path):
     return None
 
 
+# stupid class to enable lazy coding
+# makes normal values act like apply_async results
+class SerialResult(object):
+    def __init__(self, value):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+
+def apply_async(function, args, global_args):
+    """
+    Run a function in our global process pool and return a result object.
+    If we're already in a daemon process, don't spawn a new process.
+    """
+
+
+
 ###############################################################################
 ##  Test helper functions  ####################################################
 ###############################################################################
@@ -178,13 +196,11 @@ def test_classifier_once(classifier, kwargs, train_idx, test_idx, metrics,
         scorer = check_scoring(clf, scoring=metric)
         results[metric] = scorer(clf, X_test, y_test)
 
-    with open('done.txt', 'w') as f:
-        f.write('Done!')
-
     return results
 
 
-def test_classifier(classifier, df, y, subsets=None, epsilon=None, n_trials=1,
+def test_classifier(classifier, df, y, subsets=None, subset_size=None,
+                    n_parts=1, epsilon=None, perturb_type=None, n_trials=1,
                     n_folds=4, **kwargs):
     """
     Run the given classifier with the given epsilon for n_folds tests, and
@@ -192,6 +208,7 @@ def test_classifier(classifier, df, y, subsets=None, epsilon=None, n_trials=1,
 
     This is where the ** M a G i C ** happens
     """
+    # get data into the right format
     X = np.nan_to_num(df.as_matrix())
     y = np.array(y).astype('bool')
 
@@ -204,24 +221,26 @@ def test_classifier(classifier, df, y, subsets=None, epsilon=None, n_trials=1,
     global_X = X
     global_y = y
 
+    # if we're passed subsets, use those every time; otherwise generate them
+    perm_subsets = subsets
+
     if args.verbose >= 1:
         print 'testing %d folds of %d samples' % (n_folds, len(y))
 
+    # optional parallelism
     parallel = args.parallelism > 1
     if parallel:
         pool = mp.Pool(processes=args.parallelism)
 
+    # list of fold results
     trial_results = []
 
-    # stupid class to enable lazy coding
-    # makes normal values act like apply_async results
-    class Result(object):
-        def __init__(self, value): self.value = value
-        def get(self): return self.value
-
     for i in range(n_trials):
-        # generate n_folds subsets of the data
+        # generate n_folds slices of the data
         folds = KFold(n_splits=n_folds, shuffle=True).split(X)
+
+        # generate subsets if necessary
+        subsets = perm_subsets or generate_subspaces(df, subset_size, n_parts)
 
         # A list of ApplyResult objects, which will eventually hold the
         # results we want. We'll run through the loop spawning processes,
@@ -230,28 +249,33 @@ def test_classifier(classifier, df, y, subsets=None, epsilon=None, n_trials=1,
         fold_results = []
         for train_ix, test_ix in folds:
             if parallel:
-                if subsets:
+                mp_args = [classifier, kwargs, train_ix, test_ix, metrics]
+                if classifier == SubsetForest:
                     # send extra args
-                    mp_args = (classifier, kwargs, train_ix, test_ix, metrics,
-                               subsets, args.perturb_type, epsilon)
-                else:
-                    # just the basics
-                    mp_args = (classifier, kwargs, train_ix, test_ix, metrics)
+                    mp_args += [subsets, perturb_type, epsilon]
 
                 # watch out this might copy a lot of data between processes
-                apply_result = pool.apply_async(test_classifier_once, mp_args)
+                apply_result = pool.apply_async(test_classifier_once,
+                                                tuple(mp_args))
                 fold_results.append(apply_result)
 
             else:
                 # do serial thing: call the same function but wait for it
                 res = test_classifier_once(classifier, kwargs, train_ix,
                                            test_ix, metrics, subsets=subsets,
-                                           perturb_type=args.perturb_type,
+                                           perturb_type=perturb_type,
                                            epsilon=epsilon)
+
                 # store the result in janky wrapper class (~yikes~)
-                fold_results.append(Result(res))
+                fold_results.append(SerialResult(res))
 
         trial_results.append(fold_results)
+
+    if parallel:
+        # tell the pool to close worker processes once it's done (.close()), then
+        # wait for everything to finish and exit (.join())
+        pool.close()
+        pool.join()
 
     # aggregate all the results into big dict thing
     for fold_results in trial_results:
@@ -266,9 +290,6 @@ def test_classifier(classifier, df, y, subsets=None, epsilon=None, n_trials=1,
         # the number of folds and append it to the results list
         for met, val in result.items():
             results[met].append(val / n_folds)
-
-    pool.close()
-    pool.join()
 
     # just making things numpy arrays so we can do stats easier
     np_f1 = np.array(results['f1'])
@@ -286,36 +307,6 @@ def test_classifier(classifier, df, y, subsets=None, epsilon=None, n_trials=1,
             (np_acc.mean(), np_acc.std(), np_acc.min(), np_acc.max())
 
     return {'f1': np_f1, 'auc': np_auc, 'acc': np_acc}
-
-
-def test_subset_forest(df, labels, epsilon=0, n_trials=1, n_folds=4,
-                       subset_size=3, subsets=None, n_parts=1):
-    # map of metric names to arrays of scores (one set for each trial)
-    results = {met: np.ndarray(0) for met in ['f1', 'auc', 'acc']}
-    classifiers = []
-
-    # Test the classifier on each of n_trials different random feature subsets.
-    # This function exists because test_classifier does not have the ability to
-    # generate a fresh set of subsets between trials.
-    for i in range(n_trials):
-        # generate subsets if necessary
-        subsets = subsets or generate_subspaces(df, subset_size, n_parts)
-
-        # test the classifier on this set of subsets
-        res = test_classifier(classifier=SubsetForest,
-                              df=df,
-                              y=labels,
-                              # the next function takes subsets as idxs
-                              subsets=subsets,
-                              epsilon=epsilon,
-                              n_folds=n_folds,
-                              cols=list(df.columns))
-
-        # save results in the dictionary, by metric.
-        for met, arr in res.items():
-            results[met] = np.append(results[met], arr)
-
-    return results
 
 
 ###############################################################################
@@ -344,36 +335,37 @@ def compare_classifiers():
     scores = pd.DataFrame(index=classifiers, columns=columns)
 
     # test our weird whatever
-    res = test_subset_forest(df=df, labels=labels,
-                             epsilon=args.epsilon,
-                             n_trials=args.num_trials,
-                             n_folds=args.num_folds,
-                             subset_size=args.subset_size,
-                             subsets=subsets,
-                             n_parts=args.num_partitions)
+    res = test_classifier(classifier=SubsetForest, df=df, y=labels,
+                          subsets=subsets,
+                          subset_size=args.subset_size,
+                          n_parts=args.num_partitions,
+                          epsilon=args.epsilon,
+                          perturb_type=args.perturb_type,
+                          n_trials=args.num_trials,
+                          n_folds=args.num_folds)
     for met, arr in res.items():
         scores.set_value('subset-forest', met + '-mean', arr.mean())
         scores.set_value('subset-forest', met + '-std', arr.std())
 
     # random forest
-    _, res = test_classifier(classifier=RandomForestClassifier, df=df,
-                             y=labels, n_trials=args.num_trials,
-                             n_folds=args.num_folds, class_weight='balanced')
+    res = test_classifier(classifier=RandomForestClassifier, df=df,
+                          y=labels, n_trials=args.num_trials,
+                          n_folds=args.num_folds, class_weight='balanced')
     for met, arr in res.items():
         scores.set_value('random-forest', met + '-mean', arr.mean())
         scores.set_value('random-forest', met + '-std', arr.std())
 
-    # ADAboost
-    _, res = test_classifier(classifier=AdaBoostClassifier, df=df, y=labels,
-                             n_trials=args.num_trials, n_folds=args.num_folds)
+    # adaboost
+    res = test_classifier(classifier=AdaBoostClassifier, df=df, y=labels,
+                          n_trials=args.num_trials, n_folds=args.num_folds)
     for met, arr in res.items():
         scores.set_value('adaboost', met + '-mean', arr.mean())
         scores.set_value('adaboost', met + '-std', arr.std())
 
     # gradient boosting
-    _, res = test_classifier(classifier=GradientBoostingClassifier, df=df,
-                             y=labels, n_trials=args.num_trials,
-                             n_folds=args.num_folds)
+    res = test_classifier(classifier=GradientBoostingClassifier, df=df,
+                          y=labels, n_trials=args.num_trials,
+                          n_folds=args.num_folds)
     for met, arr in res.items():
         scores.set_value('gradient-boost', met + '-mean', arr.mean())
         scores.set_value('gradient-boost', met + '-std', arr.std())
@@ -410,11 +402,13 @@ def plot_subset_size_datasets():
         y = []
         yerr = []
         for subset_size in x:
-            _, res = test_subset_forest(df=df, labels=labels,
-                                        subset_size=subset_size,
-                                        epsilon=0,
-                                        n_trials=args.num_trials,
-                                        n_folds=args.num_folds)
+            res = test_classifier(classifier=SubsetForest, df=df, y=labels,
+                                  subsets=subsets,
+                                  subset_size=subset_size,
+                                  n_parts=args.num_partitions,
+                                  epsilon=0,
+                                  n_trials=args.num_trials,
+                                  n_folds=args.num_folds)
 
             mean = res['auc'].mean()
             std = res['auc'].std()
@@ -477,6 +471,7 @@ def plot_perturbation_subset_size():
                                       y=labels,
                                       subsets=subsets,
                                       epsilon=eps,
+                                      perturb_type=args.perturb_type,
                                       n_folds=n_folds,
                                       cols=list(df.columns))
                 start = i * n_folds
@@ -556,6 +551,7 @@ def plot_perturbation_datasets():
                                       y=labels,
                                       subsets=subsets,
                                       epsilon=eps,
+                                      perturb_type=args.perturb_type,
                                       n_folds=n_folds,
                                       cols=list(df.columns))
                 start = i * n_folds
@@ -630,12 +626,16 @@ def plot_binning_datasets():
                 subsets = generate_subspaces(df, args.subset_size,
                                              args.num_partitions)
 
-            _, res = test_subset_forest(df=df, labels=labels,
-                                        n_trials=args.num_trials,
-                                        n_folds=args.num_folds,
-                                        subset_size=args.subset_size,
-                                        subsets=subsets,
-                                        epsilon=0)
+            res = test_classifier(classifier=SubsetForest,
+                                  df=df, y=labels,
+                                  subsets=subsets,
+                                  subset_size=args.subset_size,
+                                  n_parts=args.num_partitions,
+                                  epsilon=0,
+                                  perturb_type=args.perturb_type,
+                                  n_trials=args.num_trials,
+                                  n_folds=args.num_folds)
+
             mean = res['auc'].mean()
             std = res['auc'].std()
             y.append(mean)
@@ -671,13 +671,16 @@ def simple_test():
     subsets = load_subsets(args.subset_file)
 
     # test the silly ensemble
-    res = test_subset_forest(df=df, labels=labels,
-                             epsilon=args.epsilon,
-                             n_trials=args.num_trials,
-                             n_folds=args.num_folds,
-                             subset_size=args.subset_size,
-                             subsets=subsets,
-                             n_parts=args.num_partitions)
+    res = test_classifier(classifier=SubsetForest,
+                          df=df, y=labels,
+                          subsets=subsets,
+                          subset_size=args.subset_size,
+                          n_parts=args.num_partitions,
+                          epsilon=args.epsilon,
+                          perturb_type=args.perturb_type,
+                          n_trials=args.num_trials,
+                          n_folds=args.num_folds)
+
     print
     for met, arr in res.items():
         print met, 'mean: %.3f, stdev: %.3f' % (arr.mean(), arr.std())
