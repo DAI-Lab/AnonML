@@ -66,8 +66,8 @@ ap.add_argument('--num-folds', type=int, default=4,
                 help='number of folds on which to test each classifier')
 ap.add_argument('--num-partitions', type=int, default=1,
                 help='number of ways to partition the dataset')
-ap.add_argument('--parallel', action='store_true', default=False,
-                help='whether to run trials in parallel')
+ap.add_argument('--parallelism', type=int, default=1,
+                help='how many processes to run in parallel')
 
 
 ###############################################################################
@@ -199,6 +199,7 @@ def test_classifier(classifier, df, y, subsets=None, epsilon=None, n_trials=1,
     metrics = ['roc_auc', 'f1', 'accuracy']
     results = {metric: [] for metric in metrics}
 
+    # globalize the feature matrix so that the other processes can access it
     global global_X, global_y
     global_X = X
     global_y = y
@@ -206,22 +207,29 @@ def test_classifier(classifier, df, y, subsets=None, epsilon=None, n_trials=1,
     if args.verbose >= 1:
         print 'testing %d folds of %d samples' % (n_folds, len(y))
 
-    if args.parallel:
-        pool = mp.Pool(processes=4)
+    parallel = args.parallelism > 1
+    if parallel:
+        pool = mp.Pool(processes=args.parallelism)
+
+    trial_results = []
+
+    # stupid class to enable lazy coding
+    # makes normal values act like apply_async results
+    class Result(object):
+        def __init__(self, value): self.value = value
+        def get(self): return self.value
 
     for i in range(n_trials):
         # generate n_folds subsets of the data
         folds = KFold(n_splits=n_folds, shuffle=True).split(X)
-        if args.parallel:
-            # A list of ApplyResult objects, which will eventually hold the
-            # results we want. We'll run through the loop spawning processes,
-            # then get all the results at the end.
-            fold_results = []
 
-        # a single set of results, metric name -> score
-        result = {metric: 0 for metric in metrics}
+        # A list of ApplyResult objects, which will eventually hold the
+        # results we want. We'll run through the loop spawning processes,
+        # then get all the results at the end.
+        # Only used in parallel
+        fold_results = []
         for train_ix, test_ix in folds:
-            if args.parallel:
+            if parallel:
                 if subsets:
                     # send extra args
                     mp_args = (classifier, kwargs, train_ix, test_ix, metrics,
@@ -236,29 +244,31 @@ def test_classifier(classifier, df, y, subsets=None, epsilon=None, n_trials=1,
 
             else:
                 # do serial thing: call the same function but wait for it
-                fold_res = test_classifier_once(classifier, kwargs, train_ix,
-                                                test_ix, metrics,
-                                                subsets=subsets,
-                                                perturb_type=args.perturb_type,
-                                                epsilon=epsilon)
-                for met, val in fold_res.items():
-                    result[met] += val
+                res = test_classifier_once(classifier, kwargs, train_ix,
+                                           test_ix, metrics, subsets=subsets,
+                                           perturb_type=args.perturb_type,
+                                           epsilon=epsilon)
+                # store the result in janky wrapper class (~yikes~)
+                fold_results.append(Result(res))
 
-        if args.parallel:
-            # collect all the threads
-            # there's probably a better way to do this...?
-            for r in fold_results:
-                fold_res = r.get()
-                for met, val in fold_res.items():
-                    result[met] += val
+        trial_results.append(fold_results)
 
-            pool.close()
-            pool.join()
+    # aggregate all the results into big dict thing
+    for fold_results in trial_results:
+        # a single set of results, metric name -> score
+        result = {metric: 0 for metric in metrics}
+        for r in fold_results:
+            fold_res = r.get()
+            for met, val in fold_res.items():
+                result[met] += val
 
         # each value is the sum of n_folds scores, so divide each value by
         # the number of folds and append it to the results list
         for met, val in result.items():
             results[met].append(val / n_folds)
+
+    pool.close()
+    pool.join()
 
     # just making things numpy arrays so we can do stats easier
     np_f1 = np.array(results['f1'])
