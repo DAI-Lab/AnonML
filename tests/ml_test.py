@@ -30,6 +30,7 @@ TEST_TYPES = ['compare-classifiers', 'subset-size-datasets',
 
 PERT_TYPES = ['bits', 'pram', 'gauss']
 
+METRICS = ['f1', 'roc_auc', 'accuracy']
 
 ap = argparse.ArgumentParser()
 ap.add_argument('tests', type=str, nargs='+', choices=TEST_TYPES,
@@ -56,14 +57,14 @@ ap.add_argument('--subset-file', type=str, default=None,
                 help='hard-coded subsets file')
 ap.add_argument('--subset-size', type=int, default=3,
                 help='number of features per generated subset')
-ap.add_argument('--recursive-subsets', action='store_true',
-                help='generates all subsets that fit inside the largest subset')
-ap.add_argument('--num-trials', type=int, default=1,
-                help='number of times to try with different, random subsets')
+ap.add_argument('--tree-metric', type=str, default='f1', choices=METRICS,
+                help='metric by which to weight trees in the subset forest')
 
 # having this default to 4 is nice for parallelism purposes
 ap.add_argument('--num-folds', type=int, default=4,
                 help='number of folds on which to test each classifier')
+ap.add_argument('--num-trials', type=int, default=1,
+                help='number of times to try with different, random subsets')
 ap.add_argument('--num-partitions', type=int, default=1,
                 help='number of ways to partition the dataset')
 ap.add_argument('--parallelism', type=int, default=1,
@@ -299,11 +300,11 @@ def test_classifier(classifier, df, y, subsets=None, subset_size=None,
     if args.verbose >= 1:
         print
         print 'Results (%s, %d trials):' % (classifier.__name__, n_trials)
-        print '\tf1: mean = %f, std = %f, (%.3f, %.3f)' % \
+        print '\tf1: mean = %f, stdev = %f, (%.3f, %.3f)' % \
             (np_f1.mean(), np_f1.std(), np_f1.min(), np_f1.max())
-        print '\tAUC: mean = %f, std = %f, (%.3f, %.3f)' % \
+        print '\tAUC: mean = %f, stdev = %f, (%.3f, %.3f)' % \
             (np_auc.mean(), np_auc.std(), np_auc.min(), np_auc.max())
-        print '\tAccuracy: mean = %f, std = %f, (%.3f, %.3f)' % \
+        print '\tAccuracy: mean = %f, stdev = %f, (%.3f, %.3f)' % \
             (np_acc.mean(), np_acc.std(), np_acc.min(), np_acc.max())
 
     return {'f1': np_f1, 'auc': np_auc, 'acc': np_acc}
@@ -679,11 +680,14 @@ def simple_test():
                           epsilon=args.epsilon,
                           perturb_type=args.perturb_type,
                           n_trials=args.num_trials,
-                          n_folds=args.num_folds)
+                          n_folds=args.num_folds,
+                          tree_metric=args.tree_metric)
 
     print
     for met, arr in res.items():
-        print met, 'mean: %.3f, stdev: %.3f' % (arr.mean(), arr.std())
+        # margin of error: two standard deviations around the mean
+        moe = 2 * arr.std() / np.sqrt(args.num_trials)
+        print met, 'mean: %.4f (+- %.4f)' % (arr.mean(), moe)
 
 
 def main():

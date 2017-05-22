@@ -44,7 +44,7 @@ class SubsetForest(ForestClassifier):
     def __init__(self, tree_metric='f1', n_folds=3, cols=None,
                  max_tree_depth=None, verbose=False):
         """
-        tree_metric (str): One of ('f1', 'auc', 'acc'). Determines which score
+        tree_metric (str): One of ('f1', 'roc_auc', 'accuracy'). Determines which score
             is used to order the decision trees
         n_folds (int): number of folds on which to test each tree
         cols (list[str]): column names
@@ -146,7 +146,7 @@ class SubsetForest(ForestClassifier):
             print
 
     def predict_proba(self, X):
-        return self.predict_proba_simple(X)
+        return self.predict_proba_complicated(X)
 
     def predict_proba_vote(self, X):
         """
@@ -192,7 +192,6 @@ class SubsetForest(ForestClassifier):
             predictions = votes * np.log((1 - false_neg) / false_pos) + \
                 (1 - votes) * np.log(false_neg / (1 - false_pos))
 
-            #Tracer()()
             lhs += predictions
 
         lhs /= len(self.trees)

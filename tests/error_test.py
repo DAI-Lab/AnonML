@@ -187,7 +187,7 @@ def test_errors(epsilons, dist=None, method='bits', trials=10):
 def plot_real_vs_est():
     """
     Generate a synthetic dataset, simulate perturbation/estimation, and graph
-    the perturbed dataset next to the real one.
+    the perturbed dataset next to the real one as histograms.
     """
     method = args.perturb_type
     dist_type = args.synth_dist

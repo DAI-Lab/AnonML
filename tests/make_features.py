@@ -45,7 +45,7 @@ def process_user_data(user_file):
 
     # compute the label
     label_name, label_val = label_func(df, pred_time=args.pred_time,
-                                            lead_time=args.lead_time)
+                                       lead_time=args.lead_time)
     if label_val is None:
         return None
 
