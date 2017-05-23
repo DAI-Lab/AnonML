@@ -53,6 +53,9 @@ ap.add_argument('--perturb-frac', type=float, default=1,
 
 ap.add_argument('--label', type=str, default='dropout',
                 help='label we are trying to predict')
+ap.add_argument('--feature-file', type=str, default=None,
+                help='if provided, only use features named in this file'
+                ' (new-line separated)')
 ap.add_argument('--subset-file', type=str, default=None,
                 help='hard-coded subsets file')
 ap.add_argument('--subset-size', type=int, default=3,
@@ -119,12 +122,23 @@ class SerialResult(object):
         return self.value
 
 
-def apply_async(function, args, global_args):
+def load_csv(path, feature_file=None):
     """
-    Run a function in our global process pool and return a result object.
-    If we're already in a daemon process, don't spawn a new process.
+    load set of features that we're allowed to use - these must be mutually
+    independent.
     """
-
+    df = pd.read_csv(open(path))
+    if feature_file is not None:
+        try:
+            feats = []
+            with open(feature_file) as ff:
+                for line in ff:
+                    feats.append(line.strip())
+            df = df[feats]
+        except Exception as e:
+            print e
+            print "Could not open feature file at", feature_file
+    return df
 
 
 ###############################################################################
@@ -318,7 +332,7 @@ def compare_classifiers():
     """
     Run a bunch of different classifiers on one dataset and print the results
     """
-    df = pd.read_csv(open(args.data_file))
+    df = load_csv(args.data_file, args.feature_file)
     labels = df[args.label].values
     del df[args.label]
 
@@ -435,7 +449,7 @@ def plot_subset_size_datasets():
 
 
 def plot_perturbation_subset_size():
-    df = pd.read_csv(open(args.data_file))
+    df = load_csv(args.data_file, args.feature_file)
     labels = df[args.label].values
     del df[args.label]
 
@@ -664,7 +678,7 @@ def simple_test():
     Run one test on the subset forest
     required args: data-file, epsilon
     """
-    df = pd.read_csv(open(args.data_file))
+    df = load_csv(args.data_file, args.feature_file)
     labels = df[args.label].values
     del df[args.label]
 

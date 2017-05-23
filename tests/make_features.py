@@ -66,6 +66,42 @@ def process_user_data(user_file):
     return features
 
 
+def estimate_median_private(arr, epsilon, low, high, splits=10):
+    """
+    performs a private estimate of the median of an array via binary search
+    todo: there's got to be research on this already
+    """
+    estimate = (high - low) / 2.
+    step = estimate
+    q = 1. / (1 + np.exp(epsilon))
+    p = 1 - q
+
+    for part in np.array_split(arr, splits):
+        step /= 2.
+        above = 0
+        below = 0
+        for val in part:
+            report_true = np.random.random() < p
+            if val > estimate:
+                if report_true:
+                    above += 1
+                else:
+                    below += 1
+            else:
+                if report_true:
+                    below += 1
+                else:
+                    above += 1
+
+        above_frac = (above - q * len(part)) / (len(part) * (p - q))
+        if above_frac > 0.5:
+            estimate += step
+        else:
+            estimate -= step
+
+    return estimate
+
+
 def bucket_data(df, label, buckets):
     # partition continuous and integer data into buckets
     for col in df.columns:
@@ -77,13 +113,29 @@ def bucket_data(df, label, buckets):
         if not do_buckets:
             continue
 
-        print col
-        arr = df[col].as_matrix()
-        mx = np.ma.masked_equal(arr, 0, copy=True)
-        bins = algos.quantile(arr[~mx.mask], np.linspace(0, 1, buckets+1))
-        bins = np.insert(bins, 0, 0)
-        bins[1] = bins[1] - bins[1] / 2
-        cuts = pd.tools.tile._bins_to_cuts(arr, bins, labels=range(buckets+1),
+        print 'bucketing column', repr(col)
+
+        arr = np.nan_to_num(df[col].as_matrix())
+
+        # this is here to mask out zeros, in case the majority of values are
+        # zeros and it's impossible to do normal bucketing
+        #mx = np.ma.masked_equal(arr, 0, copy=True)
+        #bins = algos.quantile(arr[~mx.mask], np.linspace(0, 1, buckets+1))
+
+        # then add back in a bucket specifically for zeros
+        #bins = np.insert(bins, 0, 0)
+        #bins[1] = bins[1] - bins[1] / 2
+
+        median = estimate_median_private(arr, 2, min(arr), max(arr))
+
+        epsilon = 1e-10
+        bins = algos.quantile(arr, np.linspace(0, 1, buckets+1))
+        for i in range(1, len(bins)):
+            if bins[i] <= bins[i - 1]:
+                bins[i] = bins[i - 1] + epsilon
+
+        print bins[1], median
+        cuts = pd.tools.tile._bins_to_cuts(arr, bins, labels=range(buckets),
                                            include_lowest=True)
 
         df[col] = cuts
@@ -191,7 +243,7 @@ def main():
         print "done."
         print "processing user files..."
 
-        pool = mp.Pool(8)
+        pool = mp.Pool(20)
         all_rows = pool.map(process_user_data, user_files)
         out_rows = filter(lambda r: r is not None, all_rows)
         df = pd.DataFrame(out_rows)

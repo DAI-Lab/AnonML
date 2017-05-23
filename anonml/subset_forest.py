@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import sklearn
 import pdb
 from IPython.core.debugger import Tracer
 from random import shuffle
@@ -110,6 +111,7 @@ class SubsetForest(ForestClassifier):
                 # create new decision tree classifier
                 tree = sktree.DecisionTreeClassifier(class_weight='balanced',
                                                      max_depth=self.max_tree_depth)
+                tree = sklearn.ensemble.RandomForestClassifier(class_weight='balanced')
                 tree.fit(X_train, y_train)
 
                 # cross-validate this tree
@@ -146,7 +148,7 @@ class SubsetForest(ForestClassifier):
             print
 
     def predict_proba(self, X):
-        return self.predict_proba_complicated(X)
+        return self.predict_proba_simple(X)
 
     def predict_proba_vote(self, X):
         """
