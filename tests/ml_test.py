@@ -46,6 +46,8 @@ ap.add_argument('--sample', type=float, default=1,
                 help='probability of sending any data at all; i.e. sample size')
 ap.add_argument('--epsilon', type=float, default=0,
                 help="differential privacy parameter. If zero, don't use DP.")
+ap.add_argument('--budget', type=float, default=0,
+                help='total privacy budget. Defaults to (eps * len(subsets)).')
 ap.add_argument('--perturb-type', type=str, choices=PERT_TYPES, default='bits',
                 help='technique to use to perturb data')
 ap.add_argument('--perturb-frac', type=float, default=1,
@@ -70,6 +72,9 @@ ap.add_argument('--num-trials', type=int, default=1,
                 help='number of times to try with different, random subsets')
 ap.add_argument('--num-partitions', type=int, default=1,
                 help='number of ways to partition the dataset')
+ap.add_argument('--num-subsets', type=float, default=0,
+                help='number of subsets to collect from each peer.'
+                ' Defaults to budget / epsilon.')
 ap.add_argument('--parallelism', type=int, default=1,
                 help='how many processes to run in parallel')
 
@@ -84,7 +89,7 @@ def generate_subspaces(df, subset_size, n_parts=1):
     Subsets are lists of column names (strings)
 
     subset_size (int): number of columns to include in each subset
-    n_parts (int): number of different sets of subsets to generate
+    n_parts (int): number of partitions to generate
     """
     subspaces = {}
 

@@ -75,29 +75,50 @@ def estimate_median_private(arr, epsilon, low, high, splits=10):
     step = estimate
     q = 1. / (1 + np.exp(epsilon))
     p = 1 - q
+    left = arr[:]
 
-    for part in np.array_split(arr, splits):
+    for i in range(splits):
+        if len(left) == 0:
+            break
+
+        n = (len(left) + 1) / 2
+        n = (len(arr) + splits) / splits
+
+        part = left[:n]
+        left = left[n:]
         step /= 2.
+
         above = 0
-        below = 0
         for val in part:
             report_true = np.random.random() < p
             if val > estimate:
                 if report_true:
                     above += 1
-                else:
-                    below += 1
             else:
-                if report_true:
-                    below += 1
-                else:
+                if not report_true:
                     above += 1
 
-        above_frac = (above - q * len(part)) / (len(part) * (p - q))
-        if above_frac > 0.5:
+        sample_frac = len([j for j in part if j > estimate]) / float(len(part))
+        real_frac = len([j for j in arr if j > estimate]) / float(len(arr))
+        est_frac = (above - q * len(part)) / (len(part) * (p - q))
+        est_frac = min(max(est_frac, 0), 1)
+
+        # calculate estimated margin of error
+        # P[b' = 1] = P[b = 1] * p + P[b = 0] * q
+        # stddev = sqrt(n * P[b'=1] * (1 - P[b'=1]))
+        var_p = est_frac * p + (1 - est_frac) * q
+        std = np.sqrt(len(part) * var_p * (1 - var_p)) / (len(part) * (p - q))
+
+        print 'median %.3f: estimate = %3f +- %.3f, sample = %.3f, real = %.3f'%\
+            (estimate, est_frac, std, sample_frac, real_frac)
+
+        # if the estimated fraction of users who have
+        if est_frac - std > 0.5:
             estimate += step
-        else:
+        elif est_frac + std < 0.5:
             estimate -= step
+        else:
+            continue
 
     return estimate
 
