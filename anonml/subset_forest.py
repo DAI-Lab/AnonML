@@ -6,6 +6,7 @@ from IPython.core.debugger import Tracer
 from random import shuffle
 from sklearn import tree as sktree
 from sklearn.tree import _tree
+from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble.forest import ForestClassifier
 from sklearn.model_selection import KFold
 from sklearn.metrics.scorer import check_scoring
@@ -111,7 +112,8 @@ class SubsetForest(ForestClassifier):
                 # create new decision tree classifier
                 tree = sktree.DecisionTreeClassifier(class_weight='balanced',
                                                      max_depth=self.max_tree_depth)
-                tree = sklearn.ensemble.RandomForestClassifier(class_weight='balanced')
+                #tree = sklearn.ensemble.RandomForestClassifier(class_weight='balanced')
+                tree = LogisticRegression(class_weight='balanced')
                 tree.fit(X_train, y_train)
 
                 # cross-validate this tree
@@ -136,7 +138,9 @@ class SubsetForest(ForestClassifier):
 
         for subset, (X, y) in training_data.iteritems():
             # train classifier on whole dataset
-            tree = sktree.DecisionTreeClassifier(class_weight='balanced')
+            tree = sktree.DecisionTreeClassifier(class_weight='balanced',
+                                                 max_depth=self.max_tree_depth)
+            tree = LogisticRegression(class_weight='balanced')
             tree.fit(X, y)
             self.trees[subset] = tree
             self.classes_ = tree.classes_

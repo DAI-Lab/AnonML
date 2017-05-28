@@ -23,12 +23,14 @@ ap.add_argument('--pred-time', type=int, default=5,
                 help="week in which we make a prediction")
 ap.add_argument('--lead-time', type=int, default=1,
                 help="number of weeks ahead we're trying to predict a label")
-ap.add_argument('--source-file', type=str, default=None,
-                help="load dataframe from source")
+ap.add_argument('--source-file', type=str, nargs='+', default=None,
+                help="load dataframe(s) from source")
 ap.add_argument('--out-file', type=str, default='./features.csv',
                 help="where to output the resulting feature vector")
 ap.add_argument('--buckets', type=int, default=0,
                 help="bucket numeric values into n ordered categoricals")
+ap.add_argument('--label', type=str, default='dropout',
+                help="name of the label feature")
 args = ap.parse_args()
 
 
@@ -66,7 +68,7 @@ def process_user_data(user_file):
     return features
 
 
-def estimate_median_private(arr, epsilon, low, high, splits=10):
+def estimate_median_private(arr, epsilon, low, high, splits=20):
     """
     performs a private estimate of the median of an array via binary search
     todo: there's got to be research on this already
@@ -246,8 +248,11 @@ def bucket_data(df, label, buckets):
 
 def main():
     if args.source_file:
-        df = pd.read_csv(args.source_file)
-        label_name = df.columns[0]
+        dfs = []
+        for path in args.source_file:
+            dfs.append(pd.read_csv(path))
+        df = pd.concat(dfs)
+        label_name = args.label
     else:
         user_files = [f for f in listdir(args.data_dir) if
                       isfile(join(args.data_dir, f))]
