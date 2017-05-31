@@ -467,6 +467,7 @@ def compare_classifiers():
         scores.set_value('gradient-boost', met + '-mean', arr.mean())
         scores.set_value('gradient-boost', met + '-std', arr.std())
 
+    outfile = args.out_file or 'compare-datasets.csv'
     with open(args.out_file, 'w') as f:
         scores.to_csv(f)
 
@@ -520,7 +521,8 @@ def plot_subset_size_datasets():
         if args.plot:
             plt.errorbar(x, y, yerr=yerr, fmt=fmt)
 
-    with open('subset-size-of-datasets.csv', 'w') as f:
+    outfile = args.out_file or 'subset-size-of-datasets.csv'
+    with open(outfile, 'w') as f:
         scores.to_csv(f)
 
     if args.plot:
@@ -562,7 +564,8 @@ def plot_perturbation_subset_size():
         # try each perturbation level with several different subspaces, but keep
         # those subspaces consistent
         for i in range(n_trials):
-            print '\ttesting subspace permutation %d/%d, %d folds each' % \
+            print
+            print 'Testing subspace permutation %d/%d, %d folds each' % \
                 (i+1, n_trials, n_folds)
 
             subsets = generate_subspaces(df, subset_size, args.num_partitions,
@@ -596,7 +599,8 @@ def plot_perturbation_subset_size():
                          yerr=scores['%d-std' % subset_size],
                          fmt=fmt)
 
-    with open(args.out_file, 'w') as f:
+    outfile = args.out_file or 'perturbation-subset-size.csv'
+    with open(outfile, 'w') as f:
         scores.to_csv(f)
 
     if args.plot:
@@ -616,39 +620,45 @@ def plot_perturbation_datasets():
         ('edx/6002x_f12/features-all-wk10-ld4.csv', 'edx-feats.txt', 'dropout', 'b', '6002x'),
         ('census/features.csv', 'census-feats.txt', 'label', 'g', 'census'),
     ]
-    x = [np.log(i) for i in np.arange(2, 16)]
-    scores = pd.DataFrame(index=x, columns=[f[-1] + '-mean' for f in files] +
-                                           [f[-1] + '-std' for f in files])
 
+    # try ten different budgets, with epsilon from 1 to 5
+    budget = np.linspace(1, 5, 10)
+    scores = pd.DataFrame(index=budget, columns=[f[-1] + '-mean' for f in files] +
+                                                [f[-1] + '-std' for f in files])
+
+    # pull from the flags for now; these could also be set programatically
     n_trials = args.num_trials
     n_folds = args.num_folds
+    n_subsets = args.num_subsets
 
     for f, feats, label, fmt, name in files:
         print
         print 'Testing perturbations on dataset', repr(name)
         print
-        df = load_csv('data/' + f, feats)
+        df = load_csv('data/' + f, 'features/' + feats)
         labels = df[label].values
         df = df
         del df[label]
 
-        results = pd.DataFrame(np.zeros((n_folds * n_trials,
-                                         len(x))), columns=x)
+        shape = (n_folds * n_trials, len(budget))
+        results = pd.DataFrame(np.zeros(shape), columns=budget)
 
         # try each perturbation level with several different subspaces, but keep
         # those subspaces consistent
         for i in range(n_trials):
-            print '\ttesting subspace permutation %d/%d on %s, %d trials each' % \
+            print
+            print 'Testing subspace permutation %d/%d on %s, %d folds each' % \
                 (i+1, n_trials, name, n_folds)
 
             # generate new set of subsets
             subsets = generate_subspaces(df, args.subset_size,
-                                         args.num_partitions,
-                                         args.num_subsets)
-            for eps in x:
+                                         n_parts=args.num_partitions,
+                                         n_subsets=n_subsets)
+            for b in budget:
+                eps = b / n_subsets
                 if args.verbose >= 1:
                     print
-                    print 'epsilon =', eps
+                    print 'budget = %.3f / %d' % (b, n_subsets)
 
                 res = test_classifier(classifier=SubsetForest,
                                       df=df,
@@ -661,32 +671,33 @@ def plot_perturbation_datasets():
                                       cols=list(df.columns))
                 start = i * n_folds
                 end = (i + 1) * n_folds - 1
-                results.ix[start:end, eps] = res['auc']
+                results.ix[start:end, b] = res['auc']
                 if args.verbose >= 1:
-                    print '\te = %.2f: %.3f (+- %.3f)' % (eps, res['auc'].mean(),
-                                                          res['auc'].std())
+                    print '\tbudget = %.2f: %.3f (+- %.3f)' % (b, res['auc'].mean(),
+                                                               res['auc'].std())
 
         print '%s results:' % name
         # aggregate the scores for each trial
-        for eps in x:
-            mean = results[eps].as_matrix().mean()
-            std = results[eps].as_matrix().std()
-            scores.ix[eps, name+'-mean'] = mean
-            scores.ix[eps, name+'-std'] = std
-            print '\te = %.3f: %.3f (+- %.3f)' % (eps, mean, std)
+        for b in budget:
+            mean = results[b].as_matrix().mean()
+            std = results[b].as_matrix().std()
+            scores.ix[b, name+'-mean'] = mean
+            scores.ix[b, name+'-std'] = std
+            print '\tbudget = %.3f: %.3f (+- %.3f)' % (b, mean, std)
 
         if args.plot:
-            plt.errorbar(x, scores[name+'-mean'], yerr=scores[name+'-std'],
+            plt.errorbar(budget, scores[name+'-mean'], yerr=scores[name+'-std'],
                          fmt=fmt)
 
-    with open('pert-by-dataset.csv', 'w') as f:
+    outfile = args.out_file or 'pert-by-dataset.csv'
+    with open(outfile, 'w') as f:
         scores.to_csv(f)
 
     if args.plot:
         plt.axis([0.0, 2.5, 0.5, 1.0])
         plt.xlabel('epsilon')
         plt.ylabel('roc_auc')
-        plt.title('AUC vs. Epsilon, with Standard Deviation Error')
+        plt.title('AUC vs. Epsilon, with Standard Error')
         plt.show()
 
 
@@ -754,7 +765,8 @@ def plot_binning_datasets():
         if args.plot:
             plt.errorbar(x, y, yerr=yerr, fmt=fmt)
 
-    with open('auc-by-binsize.csv', 'w') as f:
+    outfile = args.out_file or 'auc-by-binsize.csv'
+    with open(outfile, 'w') as f:
         scores.to_csv(f)
 
     if args.plot:

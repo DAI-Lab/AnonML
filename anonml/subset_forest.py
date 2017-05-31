@@ -12,6 +12,11 @@ from sklearn.model_selection import KFold
 from sklearn.metrics.scorer import check_scoring
 
 
+# basically static variables
+score_funcs = ['accuracy', 'roc_auc', 'f1']
+metrics = score_funcs + ['fp', 'fn']
+
+
 def print_tree_code(tree, feature_names):
     """
     Print out a decision tree as pseudocode
@@ -38,17 +43,38 @@ def print_tree_code(tree, feature_names):
     recurse(0, 1)
 
 
+def test_clf(clf, X_train, y_train, X_test, y_test):
+    """ cross-validate a classifier """
+    scores = {}
+
+    clf.fit(X_train, y_train)
+    y_pred = clf.predict(X_test)
+
+    # calculate false positive/false negative
+    scores['fp'] = float(sum(y_pred & ~y_test)) / sum(~y_test) if \
+        sum(~y_test) > 0 else 0
+    scores['fn'] = float(sum(~y_pred & y_test)) / sum(y_test) if \
+        sum(y_test) > 0 else 0
+
+    # use all the scoring functions
+    for met in score_funcs:
+        scorer = check_scoring(clf, scoring=met)
+        scores[met] = scorer(clf, X_test, y_test)
+
+    return scores
+
+
 class SubsetForest(ForestClassifier):
     """
-    Classifier which combines decision trees on lots of vertical partitions into
-    a single model
+    Ensemble classifier which combines classifiers on lots of vertical
+    partitions into a single model
     """
-    def __init__(self, tree_metric='f1', n_folds=3, cols=None,
+    def __init__(self, clf_metric='f1', n_folds=3, cols=None,
                  max_tree_depth=None, verbose=False):
         """
-        tree_metric (str): One of ('f1', 'roc_auc', 'accuracy'). Determines which score
-            is used to order the decision trees
-        n_folds (int): number of folds on which to test each tree
+        clf_metric (str): One of ('f1', 'roc_auc', 'accuracy'). Determines which score
+            is used to weight the subset classifiers
+        n_folds (int): number of folds on which to test each classifier
         cols (list[str]): column names
         verbose (bool): whether or not to print extra information
         """
@@ -57,57 +83,54 @@ class SubsetForest(ForestClassifier):
         self.cols = cols
         self.max_tree_depth = max_tree_depth
         self.verbose = verbose
-        self.tree_metric = tree_metric
+        self.clf_metric = clf_metric
         self.n_folds = n_folds
 
     def fit(self, training_data):
         """
         training_data: dict mapping subsets to (X, y) matrix-array tuples
 
-        For each subset of features, train and test a decision tree
+        For each subset of features, train and test a classifier
         """
         if self.verbose:
             print
             print 'Fitting Subset Forest with %d subsets' % len(training_data)
 
-        # basically static variables
-        score_funcs = ['accuracy', 'roc_auc', 'f1']
-        metrics = score_funcs + ['fp', 'fn']
-
-        # dictionary mapping a decision tree (identified by a feature subset) to
+        # dictionary mapping a classifier (identified by a feature subset) to
         # its set of performance scores
         self.scores = {subset: {met: 0 for met in metrics}
                        for subset in training_data}
 
-        # decision trees keyed by subsets
-        self.trees = {}
+        # classifiers keyed by subsets
+        self.classifiers = {}
 
         # stats
         self.num_true = 0
         self.num_false = 0
 
         if self.verbose:
-            print "\ttesting subset trees..."
+            print "\ttesting subset classifiers..."
 
-        # generate a tree for each subset, and test it on several folds of data
+        # generate a classifier for each subset, and test it on several folds of data
         for subset, (X, y) in training_data.items():
             if self.verbose:
-                print "\ttesting tree", subset, "on", len(X), "samples"
+                print "\ttesting classifier", subset, "on", len(X), "samples"
 
             # count stats about the labels
             y = y.astype('bool')
             self.num_true += sum(y)
             self.num_false += sum(~y)
 
-            # if this set has only one label, don't make a tree
+            # if this set has only one label, don't make a classifier
             if sum(y) == 0 or sum(~y) == 0:
-                print "Can't train tree on %s: all labels are the same" % subset
+                print "Can't train on %s: all labels are the same" % str(subset)
                 del training_data[subset]
                 continue
 
             # make k folds of the data for training
             folds = KFold(n_splits=self.n_folds, shuffle=True).split(X)
 
+            n_scores = 0
             for i, (train_index, test_index) in enumerate(folds):
                 if self.verbose:
                     print "\t\tfold %d/%d" % (i+1, self.n_folds)
@@ -116,47 +139,40 @@ class SubsetForest(ForestClassifier):
                 y_train, y_test = y[train_index], y[test_index]
 
                 # create new decision tree classifier
-                #tree = sktree.DecisionTreeClassifier(class_weight='balanced',
+                #clf = sktree.DecisionTreeClassifier(class_weight='balanced',
                                                      #max_depth=self.max_tree_depth)
                 # Actually, let's make it a regression
-                tree = LogisticRegression(class_weight='balanced')
+                clf = LogisticRegression(class_weight='balanced')
+
+                # sometimes this doesn't work because of
                 try:
-                    tree.fit(X_train, y_train)
-                except:
-                    pdb.set_trace()
+                    scores = test_clf(clf, X_train, y_train, X_test, y_test)
+                except Exception as e:
+                    print e
+                    continue
 
-                # cross-validate this tree
-                scores = {}
-                y_pred = tree.predict(X_test)
-
-                # calculate false positive/false negative
-                scores['fp'] = float(sum(y_pred & ~y_test)) / sum(~y_test) if \
-                    sum(~y_test) > 0 else 0
-                scores['fn'] = float(sum(~y_pred & y_test)) / sum(y_test) if \
-                    sum(y_test) > 0 else 0
-
-                # use all the scoring functions
-                for met in score_funcs:
-                    scorer = check_scoring(tree, scoring=met)
-                    scores[met] = scorer(tree, X_test, y_test)
-
-                # save average metrics for each tree
+                # save average metrics for each subset
                 for k in scores:
-                    self.scores[subset][k] += float(scores[k]) / self.n_folds
+                    self.scores[subset][k] += float(scores[k])
+                n_scores += 1
+
+            # normalize scores
+            for k in self.scores[subset]:
+                self.scores[subset][k] /= max(n_scores, 1)
 
         if self.verbose:
-            print "\ttraining subset trees"
+            print "\ttraining subset classifiers"
 
         for subset, (X, y) in training_data.items():
             # train classifier on whole dataset
-            #tree = sktree.DecisionTreeClassifier(class_weight='balanced',
+            #clf = sktree.DecisionTreeClassifier(class_weight='balanced',
                                                  #max_depth=self.max_tree_depth)
-            tree = LogisticRegression(class_weight='balanced')
-            tree.fit(X, y)
-            self.trees[subset] = tree
-            self.classes_ = tree.classes_
+            clf = LogisticRegression(class_weight='balanced')
+            clf.fit(X, y)
+            self.classifiers[subset] = clf
+            self.classes_ = clf.classes_
 
-        self.estimators_ = self.trees.values()
+        self.estimators_ = self.classifiers.values()
 
         if self.verbose:
             print "Fit complete."
@@ -167,31 +183,31 @@ class SubsetForest(ForestClassifier):
 
     def predict_proba_vote(self, X):
         """
-        Each tree gets a binary vote. Each tree's vote is weighted by its score,
+        Each clf gets a binary vote. Each clf's vote is weighted by its score,
         then they are summed.
         """
         proba = np.zeros((len(X), 2))
-        for subset, tree in self.trees.items():
-            for i, p in enumerate(tree.predict(X[:,subset])):
-                # each tree gets a vote, T or F.
+        for subset, clf in self.classifiers.items():
+            for i, p in enumerate(clf.predict(X[:,subset])):
+                # each clf gets a vote, T or F.
                 # p is a label, True or False
-                # each tree's vote is weighted by that tree's score.
-                # the particular scoring metric we're using is self.tree_metric
+                # each clf's vote is weighted by that clf's score.
+                # the particular scoring metric we're using is self.clf_metric
                 # classes are [False, True]
-                vote = self.scores[subset][self.tree_metric]
+                vote = self.scores[subset][self.clf_metric]
                 prob = [0., vote] if p else [vote, 0.]
                 proba[i, :] += prob
         return proba
 
     def predict_proba_simple(self, X):
         """
-        Take the average of the prob_a's of all trees, weighted by
-        self.tree_metric.
+        Take the average of the prob_a's of all clfs, weighted by
+        self.clf_metric.
         """
         proba = np.zeros((len(X), 2))
-        for subset, tree in self.trees.items():
-            proba += tree.predict_proba(X[:, subset]) * \
-                self.scores[subset][self.tree_metric]
+        for subset, clf in self.classifiers.items():
+            proba += clf.predict_proba(X[:, subset]) * \
+                self.scores[subset][self.clf_metric]
         return proba
 
     def predict_proba_complicated(self, X):
@@ -199,10 +215,10 @@ class SubsetForest(ForestClassifier):
         From Kalyan's thesis. Not used for now.
         """
         lhs = np.zeros((len(X)))
-        for subset, tree in self.trees.items():
+        for subset, clf in self.classifiers.items():
             # True -> 1; False -> 0
-            votes = tree.predict(X[:, subset]).astype('int')
-            #pa = tree.predict_proba(X[:, subset])[:, 1]
+            votes = clf.predict(X[:, subset]).astype('int')
+            #pa = clf.predict_proba(X[:, subset])[:, 1]
 
             false_pos = self.scores[subset]['fp']
             false_neg = self.scores[subset]['fn']
@@ -211,7 +227,7 @@ class SubsetForest(ForestClassifier):
 
             lhs += predictions
 
-        lhs /= len(self.trees)
+        lhs /= len(self.classifiers)
         rhs = np.log(float(self.num_true) / self.num_false)
 
         proba = np.ndarray((len(X), 2))
@@ -223,7 +239,7 @@ class SubsetForest(ForestClassifier):
 
     def print_scores(self):
         for ss, score in sorted(self.scores.items(),
-                                key=lambda i: -i[1][self.tree_metric])[:3]:
+                                key=lambda i: -i[1][self.clf_metric])[:3]:
             print "subset %s: f1 = %.3f; roc_auc = %.3f; acc = %.3f" % \
                 (ss, score['f1'], score['roc_auc'], score['accuracy'])
 
@@ -231,4 +247,4 @@ class SubsetForest(ForestClassifier):
                 for ix in ss:
                     print '\t%s: %s' % (ix, self.cols[ix])
 
-            #print_tree_code(self.trees[ss], self.cols[ss])
+            #print_tree_code(self.classifiers[ss], self.cols[ss])
