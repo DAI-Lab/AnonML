@@ -32,13 +32,12 @@ ap.add_argument('--buckets', type=int, default=0,
                 help="bucket numeric values into n ordered categoricals")
 ap.add_argument('--label', type=str, default='dropout',
                 help="name of the label feature")
-args = ap.parse_args()
 
 
 label_func = None
 feature_funcs = []
-bin_features = ['age', 'finalweight', 'education-num', 'capital-gain',
-                'capital-loss', 'hours-per-week']
+census_bin_features = ['age', 'finalweight', 'education-num', 'capital-gain',
+                       'capital-loss', 'hours-per-week']
 
 # accepts a dataframe of user data, sorted by time, and calls feature functions
 # on the data to generate a dict of features
@@ -92,7 +91,7 @@ def estimate_median_private(arr, epsilon, low, high, target=0.5, splits=15,
         part = left[:n]
         left = left[n:]
 
-        predicate = lambda val: val > estimate if i > 0 else val == 0
+        predicate = lambda val: val > estimate if i >= 0 else val == 0
 
         above = 0
         for val in part:
@@ -116,14 +115,14 @@ def estimate_median_private(arr, epsilon, low, high, target=0.5, splits=15,
         var_p = est_frac * p + (1 - est_frac) * q
         std = np.sqrt(len(part) * var_p * (1 - var_p)) / (len(part) * (p - q))
 
-        if i == 0:
+        if i == 0 and False:
+            # turn this on to enable non-zero median finding
             print 'num zero: estimate = %3f +- %.3f, sample = %.3f, real = %.3f'%\
                 (est_frac, std, sample_frac, real_frac)
-            # turn this on to enable non-zero median finding
-            #target = (1. - est_frac) / 2
+            target = (1. - est_frac) / 2
         else:
-            print 'median %.3f: estimate = %3f +- %.3f, sample = %.3f, real = %.3f'%\
-                (estimate, est_frac, std, sample_frac, real_frac)
+            #print 'median %.3f: estimate = %3f +- %.3f, sample = %.3f, real = %.3f'%\
+                #(estimate, est_frac, std, sample_frac, real_frac)
 
             step /= 2.
             if est_frac - std > target:
@@ -136,19 +135,22 @@ def estimate_median_private(arr, epsilon, low, high, target=0.5, splits=15,
     return estimate
 
 
-def bucket_data(df, label, buckets, private_median=False):
+def bucket_data(df, buckets, label=None, privacy=None, verbose=0,
+                bin_features=None):
+    df = df.copy()
+
     # partition continuous and integer data into buckets
     for col in df.columns:
-
         do_buckets = col != label and (
             df[col].dtype == 'float64' or (
                 df[col].dtype == 'int64' and len(set(df[col])) > buckets)
-        ) and col in bin_features
+        ) and (bin_features is None or col in bin_features)
 
         if not do_buckets:
             continue
 
-        print 'bucketing column', repr(col)
+        if verbose >= 2:
+            print 'bucketing column', repr(col)
 
         arr = np.nan_to_num(df[col].as_matrix())
 
@@ -168,10 +170,12 @@ def bucket_data(df, label, buckets, private_median=False):
             if bins[i] <= bins[i - 1]:
                 bins[i] = bins[i - 1] + epsilon
 
-        if private_median:
-            median = estimate_median_private(arr, 2, min(arr), max(arr))
-            print sorted(arr)[len(arr)/2], median
+        if privacy is not None and privacy > 0:
+            assert buckets == 2
+            median = estimate_median_private(arr, privacy, min(arr), max(arr))
             bins = np.array([0, median, max(arr)])
+            if verbose >= 2:
+                print 'median real', sorted(arr)[len(arr)/2], 'estimate', median
 
         cuts = pd.tools.tile._bins_to_cuts(arr, bins, labels=range(buckets),
                                            include_lowest=True)
@@ -306,7 +310,7 @@ def main():
 
     if args.buckets > 0:
         print "bucketing data..."
-        df = bucket_data(df, label_name, args.buckets)
+        df = bucket_data(df, args.buckets, label_name)
         print "done."
 
     print "writing to csv..."
@@ -316,4 +320,6 @@ def main():
 
 
 if __name__ == '__main__':
-   main()
+    global args
+    args = ap.parse_args()
+    main()

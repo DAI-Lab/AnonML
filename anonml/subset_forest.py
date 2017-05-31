@@ -90,14 +90,20 @@ class SubsetForest(ForestClassifier):
             print "\ttesting subset trees..."
 
         # generate a tree for each subset, and test it on several folds of data
-        for subset, (X, y) in training_data.iteritems():
+        for subset, (X, y) in training_data.items():
             if self.verbose:
-                print "\ttesting tree", subset
+                print "\ttesting tree", subset, "on", len(X), "samples"
 
             # count stats about the labels
             y = y.astype('bool')
             self.num_true += sum(y)
             self.num_false += sum(~y)
+
+            # if this set has only one label, don't make a tree
+            if sum(y) == 0 or sum(~y) == 0:
+                print "Can't train tree on %s: all labels are the same" % subset
+                del training_data[subset]
+                continue
 
             # make k folds of the data for training
             folds = KFold(n_splits=self.n_folds, shuffle=True).split(X)
@@ -112,7 +118,7 @@ class SubsetForest(ForestClassifier):
                 # create new decision tree classifier
                 #tree = sktree.DecisionTreeClassifier(class_weight='balanced',
                                                      #max_depth=self.max_tree_depth)
-                #tree = sklearn.ensemble.RandomForestClassifier(class_weight='balanced')
+                # Actually, let's make it a regression
                 tree = LogisticRegression(class_weight='balanced')
                 try:
                     tree.fit(X_train, y_train)
@@ -141,7 +147,7 @@ class SubsetForest(ForestClassifier):
         if self.verbose:
             print "\ttraining subset trees"
 
-        for subset, (X, y) in training_data.iteritems():
+        for subset, (X, y) in training_data.items():
             # train classifier on whole dataset
             #tree = sktree.DecisionTreeClassifier(class_weight='balanced',
                                                  #max_depth=self.max_tree_depth)

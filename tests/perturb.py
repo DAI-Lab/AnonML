@@ -6,10 +6,9 @@ from anonml.aggregator import get_privacy_params
 from sklearn.model_selection import KFold
 
 
-def postprocess_histogram(hist, p, q, n, m):
+def postprocess_histogram_mle(hist, p, q, n, m):
     """
-    Transform a histogram with negative entries into one with all natural numbers,
-    suitable for generating a dataset
+    do a simple MLE estimate on the histogram, same as what RAPPOR does
 
     hist: np.array() of floats
     """
@@ -19,10 +18,10 @@ def postprocess_histogram(hist, p, q, n, m):
     return hist
 
 
-def _postprocess_histogram(hist, p, q, n, m):
+def postprocess_histogram_mle_noneg(hist, p, q, n, m):
     """
-    Transform a histogram with negative entries into one with all natural numbers,
-    suitable for generating a dataset
+    MLE technique with some extra fanciness to get rid of negative entries and
+    bring down outliers. Not generally as good.
 
     hist: np.array() of floats
     """
@@ -38,10 +37,9 @@ def _postprocess_histogram(hist, p, q, n, m):
     return hist
 
 
-def _postprocess_histogram(hist, p, q, n, m):
+def postprocess_histogram_mean(hist, p, q, n, m):
     """
-    Transform a histogram with negative entries into one with all natural numbers,
-    suitable for generating a dataset
+    Another strategy. Simply ensures sum(hist) == n. Also not as good.
 
     hist: np.array() of floats
     """
@@ -50,7 +48,7 @@ def _postprocess_histogram(hist, p, q, n, m):
     return hist
 
 
-def _postprocess_histogram(hist, p, q, n, m):
+def postprocess_histogram_matrix(hist, p, q, n, m):
     """
     generate the perturbation matrix and then find its inverse
     adds more error than the MLE technique
@@ -61,6 +59,10 @@ def _postprocess_histogram(hist, p, q, n, m):
     pmat += np.identity(m) * (p - q)
     ipmat = np.linalg.inv(pmat)
     return np.dot(ipmat, hist)
+
+
+# this is the one we'll actually use
+postprocess_histogram = postprocess_histogram_mle
 
 
 ###############################################################################
@@ -120,7 +122,6 @@ def perturb_hist_bits(values, m, epsilon, sample, p=None):
     old_hist = np.zeros(m)
     pert_hist = np.zeros(m)
 
-    print 'perturbing histogram degree', m
     # random response for each row
     for idx in values:
         # add to the "real" histogram
@@ -133,17 +134,9 @@ def perturb_hist_bits(values, m, epsilon, sample, p=None):
         myhist[idx] = np.random.binomial(1, p)
         if sample == 1 or random.random() < sample:
             pert_hist += myhist
-    print 'done'
-
-    # generate the perturbation matrix and then find its inverse
-    ## Not doing it for now because it adds too much error
-    #pmat = np.ones((m, m)) * q
-    #pmat += np.identity(m) * (p - q)
-    #ipmat = np.linalg.inv(pmat)
 
     final_hist = postprocess_histogram(pert_hist.copy(), p, q, len(values), m)
 
-    print 'returning'
     return old_hist, final_hist
 
 
@@ -163,6 +156,7 @@ def perturb_hist_gauss(values, m, epsilon, delta):
 
     # create two histograms: one for real values, one for perturbed
     old_hist = sum(hist_elt(idx) for idx in values)
+
     # add some random gaussian noise
     pert_hist = np.random.normal(0, sigma, m) + old_hist
 
