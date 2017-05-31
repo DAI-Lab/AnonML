@@ -110,19 +110,24 @@ class SubsetForest(ForestClassifier):
                 y_train, y_test = y[train_index], y[test_index]
 
                 # create new decision tree classifier
-                tree = sktree.DecisionTreeClassifier(class_weight='balanced',
-                                                     max_depth=self.max_tree_depth)
+                #tree = sktree.DecisionTreeClassifier(class_weight='balanced',
+                                                     #max_depth=self.max_tree_depth)
                 #tree = sklearn.ensemble.RandomForestClassifier(class_weight='balanced')
                 tree = LogisticRegression(class_weight='balanced')
-                tree.fit(X_train, y_train)
+                try:
+                    tree.fit(X_train, y_train)
+                except:
+                    pdb.set_trace()
 
                 # cross-validate this tree
                 scores = {}
                 y_pred = tree.predict(X_test)
 
                 # calculate false positive/false negative
-                scores['fp'] = float(sum(y_pred & ~y_test)) / sum(~y_test)
-                scores['fn'] = float(sum(~y_pred & y_test)) / sum(y_test)
+                scores['fp'] = float(sum(y_pred & ~y_test)) / sum(~y_test) if \
+                    sum(~y_test) > 0 else 0
+                scores['fn'] = float(sum(~y_pred & y_test)) / sum(y_test) if \
+                    sum(y_test) > 0 else 0
 
                 # use all the scoring functions
                 for met in score_funcs:
@@ -138,8 +143,8 @@ class SubsetForest(ForestClassifier):
 
         for subset, (X, y) in training_data.iteritems():
             # train classifier on whole dataset
-            tree = sktree.DecisionTreeClassifier(class_weight='balanced',
-                                                 max_depth=self.max_tree_depth)
+            #tree = sktree.DecisionTreeClassifier(class_weight='balanced',
+                                                 #max_depth=self.max_tree_depth)
             tree = LogisticRegression(class_weight='balanced')
             tree.fit(X, y)
             self.trees[subset] = tree

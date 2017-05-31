@@ -19,6 +19,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.naive_bayes import GaussianNB
 from sklearn.model_selection import KFold
+from sklearn.metrics import roc_curve, auc
 from sklearn.metrics.scorer import check_scoring
 from anonml.subset_forest import SubsetForest
 from perturb import perturb_histograms
@@ -39,6 +40,8 @@ ap.add_argument('--data-file', type=str, help='path to the raw data file')
 ap.add_argument('--out-file', type=str, help='path to the output csv file')
 ap.add_argument('-p', '--plot', action='store_true',
                 help='whether to plot the results of the test')
+ap.add_argument('--plot-roc', action='store_true',
+                help='whether to plot the ROC curve after every trial run')
 ap.add_argument('-v', '--verbose', type=int, default=0,
                 help='how much output to display')
 
@@ -77,6 +80,7 @@ ap.add_argument('--num-subsets', type=float, default=0,
                 ' Defaults to budget / epsilon.')
 ap.add_argument('--parallelism', type=int, default=1,
                 help='how many processes to run in parallel')
+
 
 
 ###############################################################################
@@ -150,6 +154,8 @@ def load_csv(path, feature_file=None):
 ##  Test helper functions  ####################################################
 ###############################################################################
 
+global_total = defaultdict(float)
+
 def test_classifier_once(classifier, kwargs, train_idx, test_idx, metrics,
                          subsets=None, perturb_type=None, epsilon=None):
     """
@@ -210,11 +216,56 @@ def test_classifier_once(classifier, kwargs, train_idx, test_idx, metrics,
         print '\tFalse negative (rate): %d, %.3f' % (fn, float(fn) /
                                                      sum(y_test))
 
+        tree_scores = []
+        for subset, tree in clf.trees.items():
+            scorer = check_scoring(tree, scoring='roc_auc')
+            tree_scores.append((-scorer(tree, X_test[:, subset], y_test),
+                                [clf.cols[s] for s in subset]))
+            for s in subset:
+                global_total[clf.cols[s]] += -tree_scores[-1][0]
+
+        for ts in sorted(tree_scores)[:3]:
+            print -ts[0], ts[1]
+
+    if args.plot_roc:
+        y_scores = clf.predict_proba(X_test)
+        roc_pert = roc_curve(y_test, y_scores[:,1])
+        auc_pert = auc(roc_pert[0], roc_pert[1])
+
+        # compare against unperturbed data
+        training_data_clean = perturb_histograms(X=X_train, y=y_train,
+                                                 cardinality=num_bins,
+                                                 epsilon=None,
+                                                 method=None,
+                                                 subsets=subsets)
+        clf.fit(training_data_clean)
+        y_scores = clf.predict_proba(X_test)
+        roc_clean = roc_curve(y_test, y_scores[:,1])
+        auc_clean = auc(roc_clean[0], roc_clean[1])
+
+        # plot them both
+        plt.plot(roc_pert[0], roc_pert[1], color='darkorange',
+                 label='Perturbed data ROC curve (area = %0.2f)' % auc_pert)
+        plt.plot(roc_clean[0], roc_clean[1], color='darkgreen',
+                 label='Clean data ROC curve (area = %0.2f)' % auc_clean)
+
+        # baseline line
+        plt.plot([0, 1], [0, 1], color='navy', linestyle='--')
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('Receiver operating characteristic')
+        plt.legend(loc="lower right")
+
+        plt.show()
+
     # score the superclassifier
     results = {}
     for metric in metrics:
         scorer = check_scoring(clf, scoring=metric)
-        results[metric] = scorer(clf, X_test, y_test)
+        try:
+            results[metric] = scorer(clf, X_test, y_test)
+        except:
+            pdb.set_trace()
 
     return results
 
@@ -677,6 +728,36 @@ def plot_binning_datasets():
         plt.title('AUC vs. Subset Size, with Standard Deviation Error')
         plt.show()
 
+def plot_roc_curve():
+    """
+    Run one test on the subset forest and plot ROC
+    required args: data-file, epsilon
+    """
+    df = load_csv(args.data_file, args.feature_file)
+    labels = df[args.label].values
+    del df[args.label]
+
+    # load partitions/subsets if they're there
+    subsets = load_subsets(args.subset_file)
+
+    # test the silly ensemble
+    res = test_classifier(classifier=SubsetForest,
+                          df=df, y=labels,
+                          subsets=subsets,
+                          subset_size=args.subset_size,
+                          n_parts=args.num_partitions,
+                          epsilon=args.epsilon,
+                          perturb_type=args.perturb_type,
+                          n_trials=args.num_trials,
+                          n_folds=args.num_folds,
+                          tree_metric=args.tree_metric)
+
+    print
+    for met, arr in res.items():
+        # margin of error: two standard deviations around the mean
+        moe = 2 * arr.std() / np.sqrt(args.num_trials)
+        print met, 'mean: %.4f (+- %.4f)' % (arr.mean(), moe)
+
 
 def simple_test():
     """
@@ -700,7 +781,8 @@ def simple_test():
                           perturb_type=args.perturb_type,
                           n_trials=args.num_trials,
                           n_folds=args.num_folds,
-                          tree_metric=args.tree_metric)
+                          tree_metric=args.tree_metric,
+                          cols=list(df.columns))
 
     print
     for met, arr in res.items():
@@ -734,3 +816,4 @@ if __name__ == '__main__':
     global args
     args = ap.parse_args()
     main()
+    print sorted(global_total.items(), key=lambda i: -i[1])

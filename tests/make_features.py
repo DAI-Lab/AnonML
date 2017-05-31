@@ -8,6 +8,7 @@ import csv
 import imp
 import math
 import multiprocessing as mp
+import types
 from collections import defaultdict, OrderedDict
 from os import listdir
 from os.path import isfile, join
@@ -68,7 +69,8 @@ def process_user_data(user_file):
     return features
 
 
-def estimate_median_private(arr, epsilon, low, high, splits=20):
+def estimate_median_private(arr, epsilon, low, high, target=0.5, splits=10,
+                            buckets=2):
     """
     performs a private estimate of the median of an array via binary search
     todo: there's got to be research on this already
@@ -115,9 +117,9 @@ def estimate_median_private(arr, epsilon, low, high, splits=20):
             (estimate, est_frac, std, sample_frac, real_frac)
 
         # if the estimated fraction of users who have
-        if est_frac - std > 0.5:
+        if est_frac - std > target:
             estimate += step
-        elif est_frac + std < 0.5:
+        elif est_frac + std < target:
             estimate -= step
         else:
             continue
@@ -150,6 +152,7 @@ def bucket_data(df, label, buckets):
         #bins[1] = bins[1] - bins[1] / 2
 
         median = estimate_median_private(arr, 2, min(arr), max(arr))
+                                         #target=1. - float(sum(df[label])) / len(df[label]))
 
         epsilon = 1e-10
         bins = algos.quantile(arr, np.linspace(0, 1, buckets+1))
@@ -158,6 +161,7 @@ def bucket_data(df, label, buckets):
                 bins[i] = bins[i - 1] + epsilon
 
         print bins[1], median
+        bins[1] = median
         cuts = pd.tools.tile._bins_to_cuts(arr, bins, labels=range(buckets),
                                            include_lowest=True)
 
@@ -261,10 +265,17 @@ def main():
         module = imp.load_source('feature_funcs', args.feature_funcs)
         global feature_funcs, label_func
         for func_name in dir(module):
-            if func_name.startswith('ff_'):
-                feature_funcs.append(getattr(module, func_name))
-            elif func_name.startswith('label_'):
-                label_func = getattr(module, func_name)
+            func = getattr(module, func_name)
+
+            # only consider functions we find
+            if type(func) == types.FunctionType:
+                if func_name.startswith('ff_'):
+                    feature_funcs.append(func)
+                elif func_name.startswith('label_'):
+                    label_func = func
+
+        label_name = module.label_name
+        print 'label:', label_name
 
         print "done."
         print "processing user files..."
@@ -275,8 +286,6 @@ def main():
         df = pd.DataFrame(out_rows)
 
         print "done."
-
-        label_name = df.columns[0]
         num_yes = np.sum(df[label_name])
         num_no = len(df[label_name]) - num_yes
         num_null = len(all_rows) - len(out_rows)

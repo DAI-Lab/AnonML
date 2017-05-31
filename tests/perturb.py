@@ -205,13 +205,13 @@ def perturb_histograms(X, y, cardinality, method, epsilon, delta=0, sample=1,
     """
     output = {}
 
+    # if epsilon is unspecified or 0 (invalid), don't perturb data
+    if method is None or epsilon is None or epsilon == 0:
+        return dont_perturb(X, y, subsets)
+
     # enforce valid perturbation method
     if method not in ['bits', 'pram', 'gauss']:
         raise ValueError('Method cannot be %r' % method)
-
-    # if epsilon is unspecified or 0 (invalid), don't perturb data
-    if epsilon is None or epsilon == 0:
-        return dont_perturb(X, y, subsets)
 
     # permanently perturb the y-values
     perm_eps = perm_eps or epsilon
