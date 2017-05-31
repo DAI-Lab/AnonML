@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pdb
 
 
 def get_privacy_params(m, eps):
@@ -19,7 +20,7 @@ def get_privacy_params(m, eps):
     elif p2 >= 0 and p2 <= 1:
         p = p2
     else:
-        print 'Error! No p value found. Found', p1, p2
+        raise('Error! No p value found. Found', p1, p2)
 
     q = p / (lam * (1 - p) + p)
     return p, q

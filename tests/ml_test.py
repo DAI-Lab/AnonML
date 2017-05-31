@@ -178,22 +178,26 @@ def test_classifier_once(classifier, kwargs, train_idx, test_idx, metrics,
         # we need to perturb the data first
         # find the binning factor of this matrix
         # TODO: should be a parameter, not discovered like this
-        num_bins = max([max(X[:,i]) - min(X[:,i]) for i in
-                        range(X.shape[1])]) + 1
+        cardinality = {i: max(X[:,i]) - min(X[:,i]) + 1 for i in range(X.shape[1])}
 
         # TODO: is this a good way to set delta? (no)
         #       ... is there a good way to set delta?
         delta = np.exp(-float(X_train.shape[0]) / 100)
 
+        if args.verbose >= 2:
+            print 'Perturbing histogram:'
+            print 'cardinality', cardinality
         # perturb data as a bunch of histograms
         training_data = perturb_histograms(X=X_train,
                                            y=y_train,
-                                           cardinality=num_bins,
+                                           cardinality=cardinality,
                                            method=perturb_type,
                                            epsilon=epsilon,
                                            delta=delta,
                                            subsets=subsets)
 
+        if args.verbose >= 2:
+            print 'Fitting classifier'
         # fit to the training set
         # this function call will only work for SubsetForests
         clf.fit(training_data)
@@ -234,7 +238,7 @@ def test_classifier_once(classifier, kwargs, train_idx, test_idx, metrics,
 
         # compare against unperturbed data
         training_data_clean = perturb_histograms(X=X_train, y=y_train,
-                                                 cardinality=num_bins,
+                                                 cardinality={},
                                                  epsilon=None,
                                                  method=None,
                                                  subsets=subsets)

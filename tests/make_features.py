@@ -37,7 +37,8 @@ args = ap.parse_args()
 
 label_func = None
 feature_funcs = []
-
+bin_features = ['age', 'finalweight', 'education-num', 'capital-gain',
+                'capital-loss', 'hours-per-week']
 
 # accepts a dataframe of user data, sorted by time, and calls feature functions
 # on the data to generate a dict of features
@@ -69,7 +70,7 @@ def process_user_data(user_file):
     return features
 
 
-def estimate_median_private(arr, epsilon, low, high, target=0.5, splits=10,
+def estimate_median_private(arr, epsilon, low, high, target=0.5, splits=15,
                             buckets=2):
     """
     performs a private estimate of the median of an array via binary search
@@ -90,20 +91,22 @@ def estimate_median_private(arr, epsilon, low, high, target=0.5, splits=10,
 
         part = left[:n]
         left = left[n:]
-        step /= 2.
+
+        predicate = lambda val: val > estimate if i > 0 else val == 0
 
         above = 0
         for val in part:
             report_true = np.random.random() < p
-            if val > estimate:
+            # on the first iteration, we're seeing how many people have zeros
+            if predicate(val):
                 if report_true:
                     above += 1
             else:
                 if not report_true:
                     above += 1
 
-        sample_frac = len([j for j in part if j > estimate]) / float(len(part))
-        real_frac = len([j for j in arr if j > estimate]) / float(len(arr))
+        sample_frac = len([j for j in part if predicate(j)]) / float(len(part))
+        real_frac = len([j for j in arr if predicate(j)]) / float(len(arr))
         est_frac = (above - q * len(part)) / (len(part) * (p - q))
         est_frac = min(max(est_frac, 0), 1)
 
@@ -113,27 +116,34 @@ def estimate_median_private(arr, epsilon, low, high, target=0.5, splits=10,
         var_p = est_frac * p + (1 - est_frac) * q
         std = np.sqrt(len(part) * var_p * (1 - var_p)) / (len(part) * (p - q))
 
-        print 'median %.3f: estimate = %3f +- %.3f, sample = %.3f, real = %.3f'%\
-            (estimate, est_frac, std, sample_frac, real_frac)
-
-        # if the estimated fraction of users who have
-        if est_frac - std > target:
-            estimate += step
-        elif est_frac + std < target:
-            estimate -= step
+        if i == 0:
+            print 'num zero: estimate = %3f +- %.3f, sample = %.3f, real = %.3f'%\
+                (est_frac, std, sample_frac, real_frac)
+            # turn this on to enable non-zero median finding
+            #target = (1. - est_frac) / 2
         else:
-            continue
+            print 'median %.3f: estimate = %3f +- %.3f, sample = %.3f, real = %.3f'%\
+                (estimate, est_frac, std, sample_frac, real_frac)
+
+            step /= 2.
+            if est_frac - std > target:
+                estimate += step
+            elif est_frac + std < target:
+                estimate -= step
+            else:
+                continue
 
     return estimate
 
 
-def bucket_data(df, label, buckets):
+def bucket_data(df, label, buckets, private_median=False):
     # partition continuous and integer data into buckets
     for col in df.columns:
+
         do_buckets = col != label and (
             df[col].dtype == 'float64' or (
                 df[col].dtype == 'int64' and len(set(df[col])) > buckets)
-        )
+        ) and col in bin_features
 
         if not do_buckets:
             continue
@@ -151,17 +161,18 @@ def bucket_data(df, label, buckets):
         #bins = np.insert(bins, 0, 0)
         #bins[1] = bins[1] - bins[1] / 2
 
-        median = estimate_median_private(arr, 2, min(arr), max(arr))
-                                         #target=1. - float(sum(df[label])) / len(df[label]))
 
-        epsilon = 1e-10
+        epsilon = 1e-10 if df[col].dtype == 'float64' else 1
         bins = algos.quantile(arr, np.linspace(0, 1, buckets+1))
         for i in range(1, len(bins)):
             if bins[i] <= bins[i - 1]:
                 bins[i] = bins[i - 1] + epsilon
 
-        print bins[1], median
-        bins[1] = median
+        if private_median:
+            median = estimate_median_private(arr, 2, min(arr), max(arr))
+            print sorted(arr)[len(arr)/2], median
+            bins = np.array([0, median, max(arr)])
+
         cuts = pd.tools.tile._bins_to_cuts(arr, bins, labels=range(buckets),
                                            include_lowest=True)
 

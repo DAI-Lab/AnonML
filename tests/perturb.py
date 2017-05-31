@@ -120,6 +120,7 @@ def perturb_hist_bits(values, m, epsilon, sample, p=None):
     old_hist = np.zeros(m)
     pert_hist = np.zeros(m)
 
+    print 'perturbing histogram degree', m
     # random response for each row
     for idx in values:
         # add to the "real" histogram
@@ -130,8 +131,9 @@ def perturb_hist_bits(values, m, epsilon, sample, p=None):
 
         # draw one random value for the tuple we actually have
         myhist[idx] = np.random.binomial(1, p)
-        if random.random() < sample:
+        if sample == 1 or random.random() < sample:
             pert_hist += myhist
+    print 'done'
 
     # generate the perturbation matrix and then find its inverse
     ## Not doing it for now because it adds too much error
@@ -141,6 +143,7 @@ def perturb_hist_bits(values, m, epsilon, sample, p=None):
 
     final_hist = postprocess_histogram(pert_hist.copy(), p, q, len(values), m)
 
+    print 'returning'
     return old_hist, final_hist
 
 
@@ -223,23 +226,25 @@ def perturb_histograms(X, y, cardinality, method, epsilon, delta=0, sample=1,
             y_pert[i] = not y[i]
 
     # get the number of possible tuples for a subset
-    hsize = lambda subset: 2 * cardinality ** len(subset)
+    hsize = lambda subset: 2 * np.prod([cardinality[s] for s in subset])
 
     # convert a tuple to an index into the histogram
     def hist_idx(subset, row):
         res = 0
-        for i, v in enumerate(X[row][np.array(subset)]):
-            res += cardinality ** i * v
+        base = 1
+        for col in subset:
+            res += base * X[row][col]
+            base *= cardinality[col]
         return res * 2 + y_pert[row]
 
     # convert the histogram index back into a tuple
-    def idx_to_tuple(idx, degree):
+    def idx_to_tuple(idx, subset):
         my_tup = []
         y = bool(idx % 2)
         idx /= 2
-        for _ in range(degree):
-            my_tup.append(idx % cardinality)
-            idx /= cardinality
+        for col in subset:
+            my_tup.append(idx % cardinality[col])
+            idx /= cardinality[col]
         return my_tup, y
 
     # array of l2-norm errors
@@ -276,7 +281,7 @@ def perturb_histograms(X, y, cardinality, method, epsilon, delta=0, sample=1,
             # convert the histogram into a list of rows
             for i, num in enumerate(pert_hist):
                 # map histogram index back to tuple
-                tup, label = idx_to_tuple(i, len(subset))
+                tup, label = idx_to_tuple(i, subset)
 
                 # round floats to ints, and add that many of the tuple
                 # TODO: look into linear programming/other solutions to this
