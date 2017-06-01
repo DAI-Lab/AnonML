@@ -545,22 +545,27 @@ def plot_perturbation_subset_size():
     biggest_subset = 5
     pairs = zip(range(1, biggest_subset + 1), ['r', 'b', 'g', 'y', 'k'])
 
-    x = [10 ** i/10.0 for i in range(-10, 5)]
+    budget = np.linspace(1, 5, 10)
 
-    scores = pd.DataFrame(index=x, columns=[str(p[0]) + '-mean' for p in pairs] +
-                                           [str(p[0]) + '-std' for p in pairs])
+    scores = pd.DataFrame(index=budget, columns=[str(p[0]) + '-mean' for p in pairs] +
+                                                [str(p[0]) + '-std' for p in pairs])
 
     print
-    print 'Testing performance on perturbed data with different feature space sizes'
+    print 'Testing performance on perturbed data with different feature subset sizes'
     print
 
     n_trials = args.num_trials
     n_folds = args.num_folds
+    n_parts = args.num_partitions
+    n_subsets = args.num_subsets
+
+    # number of trials to run on each set of subsets
+    trials_per_trial = 100
 
     for subset_size, fmt in pairs:
         print 'Testing perturbation for subset size', subset_size
         results = pd.DataFrame(np.zeros((n_folds * n_trials,
-                                         len(x))), columns=x)
+                                         len(budget))), columns=budget)
 
         # try each perturbation level with several different subspaces, but keep
         # those subspaces consistent
@@ -569,34 +574,36 @@ def plot_perturbation_subset_size():
             print 'Testing subspace permutation %d/%d, %d folds each' % \
                 (i+1, n_trials, n_folds)
 
-            subsets = generate_subspaces(df, subset_size, args.num_partitions,
-                                         args.num_subsets)
-            for eps in x:
+            subsets = generate_subspaces(df, subset_size, n_parts, n_subsets)
+            for b in budget:
+                eps = b / float(n_subsets)
                 res = test_classifier(classifier=SubsetForest,
                                       df=df,
                                       y=labels,
                                       subsets=subsets,
                                       epsilon=eps,
                                       perturb_type=args.perturb_type,
+                                      n_trials=trials_per_trial,
                                       n_folds=n_folds,
                                       bucket=True,
                                       cols=list(df.columns))
-                start = i * n_folds
-                end = (i + 1) * n_folds - 1
-                results.ix[start:end, eps] = res['auc']
-                print '\t\te = %.2f: %.3f (+- %.3f)' % (eps, res['auc'].mean(),
-                                                        res['auc'].std())
+
+                start = i * trials_per_trial
+                end = (i + 1) * trials_per_trial - 1
+                results.ix[start:end, b] = res['auc']
+                print '\t\tbudget = %.2f: %.3f (+- %.3f)' % (
+                    b, res['auc'].mean(), res['auc'].std())
 
         # aggregate the scores for each trial
-        for eps in x:
-            mean = results[eps].as_matrix().mean()
-            std = results[eps].as_matrix().std()
-            scores.ix[eps, '%d-mean' % subset_size] = mean
-            scores.ix[eps, '%d-std' % subset_size] = std
-            print '\te = %.3f: %.3f (+- %.3f)' % (eps, mean, std)
+        for b in budget:
+            mean = results[b].as_matrix().mean()
+            std = results[b].as_matrix().std()
+            scores.ix[b, '%d-mean' % subset_size] = mean
+            scores.ix[b, '%d-std' % subset_size] = std
+            print '\tbudget = %.3f: %.3f (+- %.3f)' % (b, mean, std)
 
         if args.plot:
-            plt.errorbar(x, scores['%d-mean' % subset_size],
+            plt.errorbar(budget, scores['%d-mean' % subset_size],
                          yerr=scores['%d-std' % subset_size],
                          fmt=fmt)
 
@@ -605,7 +612,7 @@ def plot_perturbation_subset_size():
         scores.to_csv(f)
 
     if args.plot:
-        plt.axis([0.0, 1.0, 0.5, 1.0])
+        plt.axis([1.0, 5.0, 0.5, 1.0])
         plt.xlabel('perturbation')
         plt.ylabel('roc_auc')
         plt.title('AUC vs. Perturbation, with Standard Deviation Error')
@@ -633,7 +640,7 @@ def plot_perturbation_datasets():
     n_trials = args.num_trials
 
     # number of trials to run on each set of subsets
-    trials_per_trial = 10
+    trials_per_trial = 100
 
     for f, feats, label, fmt, name in files:
         print
