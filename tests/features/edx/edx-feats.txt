@@ -1,0 +1,12 @@
+dropout
+distinct_attempts_6
+distinct_attempts_6_trend
+number_of_attempts_7
+distinct_problems_correct_8
+distinct_problems_correct_8_trend
+average_time_to_solve_problem_12  
+observed_event_timestamp_variance_13
+attempts_correct_208
+attempts_correct_208_trend
+average_predeadline_submission_time_210_average
+std_hours_working_301_average
