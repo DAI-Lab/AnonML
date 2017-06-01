@@ -105,7 +105,8 @@ def generate_subspaces(df, subset_size, n_parts=1, n_subsets=None):
         random.shuffle(shuf_cols)
 
         # if necessary, truncate to a random subset of the data
-        if n_subsets is not None:
+        # n_subsets cannot be 0
+        if n_subsets:
             shuf_cols = shuf_cols[:subset_size * n_subsets]
 
         while len(shuf_cols):
@@ -195,8 +196,8 @@ def test_classifier_once(classifier, kwargs, train_idx, test_idx, metrics,
     X_train, X_test = X[train_idx], X[test_idx]
     y_train, y_test = y[train_idx], y[test_idx]
 
-    if subsets is None:
-        # if we're using the whole dataset, go right ahead
+    if classifier != SubsetForest:
+        # if we're using a normal classifier, go right ahead
         clf.fit(X_train, y_train)
     else:
         # using subsets:
@@ -336,8 +337,10 @@ def test_classifier(classifier, df, y, subsets=None, subset_size=None,
         folds = KFold(n_splits=n_folds, shuffle=True).split(df.as_matrix())
 
         # generate subsets if necessary
-        subsets = perm_subsets or generate_subspaces(df, subset_size,
-                                                     n_parts, n_subsets)
+
+        if classifier == SubsetForest:
+            subsets = perm_subsets or generate_subspaces(df, subset_size,
+                                                         n_parts, n_subsets)
 
         # A list of ApplyResult objects, which will eventually hold the
         # results we want. We'll run through the loop spawning processes,
@@ -468,8 +471,8 @@ def compare_classifiers():
         scores.set_value('gradient-boost', met + '-mean', arr.mean())
         scores.set_value('gradient-boost', met + '-std', arr.std())
 
-    outfile = args.out_file or 'compare-datasets.csv'
-    with open(args.out_file, 'w') as f:
+    outfile = args.out_file or 'compare-classifiers.csv'
+    with open(outfile, 'w') as f:
         scores.to_csv(f)
 
 
