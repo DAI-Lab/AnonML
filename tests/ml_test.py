@@ -66,14 +66,16 @@ ap.add_argument('--subset-file', type=str, default=None,
                 help='hard-coded subsets file')
 ap.add_argument('--subset-size', type=int, default=3,
                 help='number of features per generated subset')
-ap.add_argument('--tree-metric', type=str, default='f1', choices=METRICS,
-                help='metric by which to weight trees in the subset forest')
+ap.add_argument('--clf-metric', type=str, default='f1', choices=METRICS,
+                help='metric by which to weight subclassifiers in the subset forest')
 
 # having this default to 4 is nice for parallelism purposes
 ap.add_argument('--num-folds', type=int, default=4,
                 help='number of folds on which to test each classifier')
 ap.add_argument('--num-trials', type=int, default=1,
                 help='number of times to try with different, random subsets')
+ap.add_argument('--trials-per-subset', type=int, default=1,
+                help='number of times to try with each subset')
 ap.add_argument('--num-partitions', type=int, default=1,
                 help='number of ways to partition the dataset')
 ap.add_argument('--num-subsets', type=int, default=0,
@@ -88,7 +90,7 @@ ap.add_argument('--parallelism', type=int, default=1,
 ##  Misc helper functions  ####################################################
 ###############################################################################
 
-def generate_subspaces(df, subset_size, n_parts=1, n_subsets=None):
+def generate_subspaces(n_cols, subset_size, n_parts=1, n_subsets=None):
     """
     Generate random, non-overlapping subsets of subset_size columns each
     Subsets are lists of column names (strings)
@@ -96,24 +98,30 @@ def generate_subspaces(df, subset_size, n_parts=1, n_subsets=None):
     subset_size (int): number of columns to include in each subset
     n_parts (int): number of partitions to generate
     """
-    subspaces = {}
+    subspaces = defaultdict(list)
 
     # do k folds of the data, and use each one as a partition
     for i in range(n_parts):
-        subspaces[i] = []
-        shuf_cols = range(len(df.columns))
+        shuf_cols = range(n_cols)
         random.shuffle(shuf_cols)
 
         # if necessary, truncate to a random subset of the data
-        if n_subsets is not None:
+        if n_subsets:
             shuf_cols = shuf_cols[:subset_size * n_subsets]
 
         while len(shuf_cols):
-            # pop off the first subset_size columns and add to the list
-            subspaces[i].append(tuple(shuf_cols[:subset_size]))
+            # pop off the first subset_size columns: that's the new subset
+            # sort its elements, since order doesn't matter
+            subset = tuple(sorted(shuf_cols[:subset_size]))
+
+            # add this partition to this subset's list
+            subspaces[subset].append(i)
+
+            # truncate the remaining columns
             shuf_cols = shuf_cols[subset_size:]
 
-    return subspaces
+    print dict(subspaces)
+    return dict(subspaces)
 
 
 def load_subsets(path):
@@ -336,7 +344,7 @@ def test_classifier(classifier, df, y, subsets=None, subset_size=None,
         folds = KFold(n_splits=n_folds, shuffle=True).split(df.as_matrix())
 
         # generate subsets if necessary
-        subsets = perm_subsets or generate_subspaces(df, subset_size,
+        subsets = perm_subsets or generate_subspaces(df.shape[1], subset_size,
                                                      n_parts, n_subsets)
 
         # A list of ApplyResult objects, which will eventually hold the
@@ -558,23 +566,21 @@ def plot_perturbation_subset_size():
     n_folds = args.num_folds
     n_parts = args.num_partitions
     n_subsets = args.num_subsets
-
-    # number of trials to run on each set of subsets
-    trials_per_trial = 100
+    trials_per_ss = args.trials_per_subset
 
     for subset_size, fmt in pairs:
         print 'Testing perturbation for subset size', subset_size
-        results = pd.DataFrame(np.zeros((n_folds * n_trials,
-                                         len(budget))), columns=budget)
+        shape = (n_trials * trials_per_ss, len(budget))
+        results = pd.DataFrame(np.zeros(shape), columns=budget)
 
         # try each perturbation level with several different subspaces, but keep
         # those subspaces consistent
         for i in range(n_trials):
             print
-            print 'Testing subspace permutation %d/%d, %d folds each' % \
-                (i+1, n_trials, n_folds)
+            print 'Testing subspace permutation %d/%d, %d trials each' % \
+                (i+1, n_trials, trials_per_ss)
 
-            subsets = generate_subspaces(df, subset_size, n_parts, n_subsets)
+            subsets = generate_subspaces(df.shape[1], subset_size, n_parts, n_subsets)
             for b in budget:
                 eps = b / float(n_subsets)
                 res = test_classifier(classifier=SubsetForest,
@@ -583,16 +589,18 @@ def plot_perturbation_subset_size():
                                       subsets=subsets,
                                       epsilon=eps,
                                       perturb_type=args.perturb_type,
-                                      n_trials=trials_per_trial,
+                                      n_trials=trials_per_ss,
                                       n_folds=n_folds,
                                       bucket=True,
                                       cols=list(df.columns))
 
-                start = i * trials_per_trial
-                end = (i + 1) * trials_per_trial - 1
+                start = i * trials_per_ss
+                end = (i + 1) * trials_per_ss - 1
                 results.ix[start:end, b] = res['auc']
-                print '\t\tbudget = %.2f: %.3f (+- %.3f)' % (
+                print
+                print 'budget = %.2f: %.3f (+- %.3f)' % (
                     b, res['auc'].mean(), res['auc'].std())
+                print
 
         # aggregate the scores for each trial
         for b in budget:
@@ -638,9 +646,7 @@ def plot_perturbation_datasets():
     n_folds = args.num_folds
     n_subsets = args.num_subsets
     n_trials = args.num_trials
-
-    # number of trials to run on each set of subsets
-    trials_per_trial = 100
+    trials_per_ss = args.trials_per_subset
 
     for f, feats, label, fmt, name in files:
         print
@@ -653,7 +659,7 @@ def plot_perturbation_datasets():
 
         # we're gonna store results from each trial in a big array for now, then
         # compute standard deviation on everything later
-        shape = (n_trials * trials_per_trial, len(budget))
+        shape = (n_trials * trials_per_ss, len(budget))
         results = pd.DataFrame(np.zeros(shape), columns=budget)
 
         # try each perturbation level with several different subspaces, but keep
@@ -664,7 +670,7 @@ def plot_perturbation_datasets():
                 (i+1, n_trials, name, n_folds)
 
             # generate new set of subsets
-            subsets = generate_subspaces(df, args.subset_size,
+            subsets = generate_subspaces(df.shape[1], args.subset_size,
                                          n_parts=args.num_partitions,
                                          n_subsets=n_subsets)
             for b in budget:
@@ -681,14 +687,14 @@ def plot_perturbation_datasets():
                                       epsilon=eps,
                                       perturb_type=args.perturb_type,
                                       n_folds=n_folds,
-                                      n_trials=trials_per_trial,
+                                      n_trials=trials_per_ss,
                                       bucket=True,
                                       cols=list(df.columns))
 
                 # results are in the form of an array, so we drop that into its
                 # appropriate slice here
-                start = i * trials_per_trial
-                end = (i + 1) * trials_per_trial - 1
+                start = i * trials_per_ss
+                end = (i + 1) * trials_per_ss - 1
                 results.ix[start:end, b] = res['auc']
 
                 if args.verbose >= 1:
@@ -757,7 +763,7 @@ def plot_binning_datasets():
             print 'generated %d bins for dataset %s' % (num_bins, name)
 
             if not subsets:
-                subsets = generate_subspaces(df, args.subset_size,
+                subsets = generate_subspaces(df.shape[1], args.subset_size,
                                              args.num_partitions,
                                              args.num_subsets)
 
@@ -820,7 +826,7 @@ def simple_test():
                           n_trials=args.num_trials,
                           n_folds=args.num_folds,
                           bucket=True,
-                          tree_metric=args.tree_metric,
+                          clf_metric=args.clf_metric,
                           cols=list(df.columns))
 
     print

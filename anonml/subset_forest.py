@@ -100,6 +100,7 @@ class SubsetForest(ForestClassifier):
         # its set of performance scores
         self.scores = {subset: {met: 0 for met in metrics}
                        for subset in training_data}
+        trials = {subset: 0 for subset in training_data}
 
         # classifiers keyed by subsets
         self.classifiers = {}
@@ -154,14 +155,15 @@ class SubsetForest(ForestClassifier):
                 # save average metrics for each subset
                 for k in scores:
                     self.scores[subset][k] += float(scores[k])
-                n_scores += 1
-
-            # normalize scores
-            for k in self.scores[subset]:
-                self.scores[subset][k] /= max(n_scores, 1)
+                trials[subset] += 1
 
         if self.verbose:
             print "\ttraining subset classifiers"
+
+        # normalize scores
+        for subset in training_data.keys():
+            for k in self.scores[subset]:
+                self.scores[subset][k] /= max(trials[subset], 1)
 
         for subset, (X, y) in training_data.items():
             # train classifier on whole dataset

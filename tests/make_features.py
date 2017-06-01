@@ -166,9 +166,6 @@ def bucket_data(df, buckets, label=None, privacy=None, verbose=0,
 
         epsilon = 1e-10 if df[col].dtype == 'float64' else 1
         bins = algos.quantile(arr, np.linspace(0, 1, buckets+1))
-        for i in range(1, len(bins)):
-            if bins[i] <= bins[i - 1]:
-                bins[i] = bins[i - 1] + epsilon
 
         if privacy is not None and privacy > 0:
             assert buckets == 2
@@ -176,6 +173,10 @@ def bucket_data(df, buckets, label=None, privacy=None, verbose=0,
             bins = np.array([0, median, max(arr)])
             if verbose >= 2:
                 print 'median real', sorted(arr)[len(arr)/2], 'estimate', median
+
+        for i in range(1, len(bins)):
+            if bins[i] <= bins[i - 1]:
+                bins[i] = bins[i - 1] + epsilon
 
         cuts = pd.tools.tile._bins_to_cuts(arr, bins, labels=range(buckets),
                                            include_lowest=True)
