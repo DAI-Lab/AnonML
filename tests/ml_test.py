@@ -320,7 +320,8 @@ def test_classifier(classifier, df, y, subsets=None, subset_size=None,
     perm_subsets = subsets
 
     if args.verbose >= 1:
-        print 'testing %d folds of %d samples' % (n_folds, len(y))
+        print 'testing %d trials on %d samples, %d folds each' % (
+            n_trials, len(y), n_folds)
 
     # optional parallelism
     parallel = args.parallelism > 1
@@ -616,9 +617,9 @@ def plot_perturbation_datasets():
     Plot performance of a few different datasets by perturbation
     """
     files = [
-        ('edx/3091x_f12/features-all-wk10-ld4.csv', 'edx-feats.txt', 'dropout', 'r', '3091x'),
-        ('edx/6002x_f12/features-all-wk10-ld4.csv', 'edx-feats.txt', 'dropout', 'b', '6002x'),
-        ('census/features.csv', 'census-feats.txt', 'label', 'g', 'census'),
+        ('edx/3091x_f12/features-all-wk10-ld4.csv', 'edx/edx-feats.txt', 'dropout', 'r', '3091x'),
+        ('edx/6002x_f12/features-all-wk10-ld4.csv', 'edx/edx-feats.txt', 'dropout', 'b', '6002x'),
+        ('census/features.csv', 'census/census-feats.txt', 'label', 'g', 'census'),
     ]
 
     # try ten different budgets, with epsilon from 1 to 5
@@ -627,9 +628,12 @@ def plot_perturbation_datasets():
                                                 [f[-1] + '-std' for f in files])
 
     # pull from the flags for now; these could also be set programatically
-    n_trials = args.num_trials
     n_folds = args.num_folds
     n_subsets = args.num_subsets
+    n_trials = args.num_trials
+
+    # number of trials to run on each set of subsets
+    trials_per_trial = 10
 
     for f, feats, label, fmt, name in files:
         print
@@ -640,7 +644,9 @@ def plot_perturbation_datasets():
         df = df
         del df[label]
 
-        shape = (n_folds * n_trials, len(budget))
+        # we're gonna store results from each trial in a big array for now, then
+        # compute standard deviation on everything later
+        shape = (n_trials * trials_per_trial, len(budget))
         results = pd.DataFrame(np.zeros(shape), columns=budget)
 
         # try each perturbation level with several different subspaces, but keep
@@ -660,6 +666,7 @@ def plot_perturbation_datasets():
                     print
                     print 'budget = %.3f / %d' % (b, n_subsets)
 
+                # dooo itt
                 res = test_classifier(classifier=SubsetForest,
                                       df=df,
                                       y=labels,
@@ -667,11 +674,16 @@ def plot_perturbation_datasets():
                                       epsilon=eps,
                                       perturb_type=args.perturb_type,
                                       n_folds=n_folds,
+                                      n_trials=trials_per_trial,
                                       bucket=True,
                                       cols=list(df.columns))
-                start = i * n_folds
-                end = (i + 1) * n_folds - 1
+
+                # results are in the form of an array, so we drop that into its
+                # appropriate slice here
+                start = i * trials_per_trial
+                end = (i + 1) * trials_per_trial - 1
                 results.ix[start:end, b] = res['auc']
+
                 if args.verbose >= 1:
                     print '\tbudget = %.2f: %.3f (+- %.3f)' % (b, res['auc'].mean(),
                                                                res['auc'].std())
@@ -713,7 +725,7 @@ def plot_binning_datasets():
     x = [0, 10, 5, 2]
     scores = pd.DataFrame(index=x, columns=[f[-1] + '-mean' for f in files] +
                                            [f[-1] + '-std' for f in files])
-
+    scores.index.name = 'perturbation'
 
     for f, feats, label, fmt, name in files:
         subsets = None
