@@ -248,44 +248,45 @@ def perturb_histograms(X, y, cardinality, method, epsilon, delta=0, sample=1,
     folds = generate_partitions(X, len(subsets))
 
     # iterate over subsets on the outside
-    for i, sets in subsets.items():
-        rows = folds[i]
-        for subset in sets:
-            m = hsize(subset)
-            categoricals = [hist_idx(subset, row) for row in rows]
+    for subset, parts in subsets.items():
+        # put together all the partitions this subset will use
+        rows = np.concatenate([folds[p] for p in parts])
 
-            if method == 'pram':
-                # lambda parameter: each peer's real value is lambda times more
-                # likely to be reported than any other value.
-                old_hist, pert_hist = perturb_hist_pram(categoricals, m,
-                                                        epsilon, sample)
-            elif method == 'bits':
-                # lambda parameter: each peer's real value is lambda times more
-                # likely to be reported than any other value.
-                old_hist, pert_hist = perturb_hist_bits(categoricals, m,
-                                                        epsilon, sample)
+        m = hsize(subset)
+        categoricals = [hist_idx(subset, row) for row in rows]
 
-            elif method == 'gauss':
-                old_hist, pert_hist = perturb_hist_gauss(categoricals, m,
-                                                         epsilon, delta)
+        if method == 'pram':
+            # lambda parameter: each peer's real value is lambda times more
+            # likely to be reported than any other value.
+            old_hist, pert_hist = perturb_hist_pram(categoricals, m,
+                                                    epsilon, sample)
+        elif method == 'bits':
+            # lambda parameter: each peer's real value is lambda times more
+            # likely to be reported than any other value.
+            old_hist, pert_hist = perturb_hist_bits(categoricals, m,
+                                                    epsilon, sample)
 
-            pert_tuples = []    # covariate rows
-            labels = []         # label data
+        elif method == 'gauss':
+            old_hist, pert_hist = perturb_hist_gauss(categoricals, m,
+                                                     epsilon, delta)
 
-            # convert the histogram into a list of rows
-            for i, num in enumerate(pert_hist):
-                # map histogram index back to tuple
-                tup, label = idx_to_tuple(i, subset)
+        pert_tuples = []    # covariate rows
+        labels = []         # label data
 
-                # round floats to ints, and add that many of the tuple
-                # TODO: look into linear programming/other solutions to this
-                num = int(round(num))
-                pert_tuples += num * [tup]
-                labels += num * [label]
+        # convert the histogram into a list of rows
+        for i, num in enumerate(pert_hist):
+            # map histogram index back to tuple
+            tup, label = idx_to_tuple(i, subset)
 
-            # aand back into a matrix
-            out_X = np.array(pert_tuples)
-            out_y = np.array(labels)
-            output[subset] = out_X, out_y
+            # round floats to ints, and add that many of the tuple
+            # TODO: look into linear programming/other solutions to this
+            num = int(round(num))
+            pert_tuples += num * [tup]
+            labels += num * [label]
+
+        # aand back into a matrix
+        out_X = np.array(pert_tuples)
+        out_y = np.array(labels)
+        output[subset] = out_X, out_y
 
     return output
