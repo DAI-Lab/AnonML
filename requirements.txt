@@ -1,6 +1,6 @@
 matplotlib==2.0.0
-numpy==1.10.4
-pandas==0.13.1
+numpy==1.12.1
+pandas==0.20.1
 scipy==0.16.1
 pycrypto==2.6.1
 ipython==5.3.0
