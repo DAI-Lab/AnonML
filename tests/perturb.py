@@ -220,7 +220,7 @@ def perturb_histograms(X, y, cardinality, method, epsilon, delta=0, sample=1,
             y_pert[i] = not y[i]
 
     # get the number of possible tuples for a subset
-    hsize = lambda subset: 2 * np.prod([cardinality[s] for s in subset])
+    hsize = lambda subset: int(2 * np.prod([cardinality[s] for s in subset]))
 
     # convert a tuple to an index into the histogram
     def hist_idx(subset, row):

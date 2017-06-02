@@ -36,6 +36,16 @@ def get_rappor_params(m, eps):
     return p, q
 
 
+def get_rr_params(m, eps):
+    """
+    given m and epsilon, find random response p and q
+    """
+    lam = np.exp(eps)
+    p = lam / (lam + m - 1)
+    q = 1. / (lam + m - 1)
+    return p, q
+
+
 # accepts bit strings from clients and generates, normalizes histogram
 
 class Aggregator(object):

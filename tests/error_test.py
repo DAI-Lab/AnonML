@@ -10,7 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from anonml.subset_forest import SubsetForest
-from anonml.aggregator import get_privacy_params, get_rappor_params
+from anonml.aggregator import get_privacy_params, get_rappor_params, get_rr_params
 from perturb import *
 
 TEST_TYPES = ['compare-dist', 'stderr', 'expected-err', 'plot-hist']
@@ -262,6 +262,9 @@ def plot_expected_error(by='m'):
     min_err = []
     defaults = []
     def_err = []
+    pram = []
+    pram_err = []
+
     epsilons = np.arange(0.1, 10, 0.1)
     Ms = np.arange(2, 100, 1)
     m = args.cardinality
@@ -289,14 +292,19 @@ def plot_expected_error(by='m'):
         defaults.append((x, p))
         def_err.append((x, mle_se(m, n, p, q)))
 
-    # connect the minimum point on each curve
-    fig, ax1 = plt.subplots()
-    ax1.set_xlabel('epsilon')
-    ax1.set_ylabel('p')
+        # and plot the random response case
+        p, q = get_rr_params(m, eps)
+        pram.append((x, p))
+        pram_err.append((x, mle_se(m, n, p, q)))
 
-    ax1.plot(*zip(*mins))
-    ax1.plot(*zip(*defaults))
-    plt.show()
+    # connect the minimum point on each curve
+    #fig, ax1 = plt.subplots()
+    #ax1.set_xlabel('epsilon')
+    #ax1.set_ylabel('p')
+
+    #ax1.plot(*zip(*mins))
+    #ax1.plot(*zip(*defaults))
+    #plt.show()
 
     fig, ax2 = plt.subplots()
     ax2.set_xlabel(by)
@@ -305,6 +313,7 @@ def plot_expected_error(by='m'):
 
     ax2.plot(*zip(*min_err))
     ax2.plot(*zip(*def_err))
+    ax2.plot(*zip(*pram_err))
 
     plt.show()
 
