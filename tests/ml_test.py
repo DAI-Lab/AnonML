@@ -30,7 +30,7 @@ TEST_TYPES = ['compare-classifiers', 'subset-size-datasets',
               'perturbation-subset-size', 'perturbation',
               'perturbation-datasets', 'binning-datasets', 'simple']
 
-PERT_TYPES = ['bits', 'pram', 'gauss']
+PERT_TYPES = ['bits', 'pram', 'gauss', 'best']
 
 METRICS = ['f1', 'roc_auc', 'accuracy']
 
@@ -52,7 +52,7 @@ ap.add_argument('--epsilon', type=float, default=0,
                 help="differential privacy parameter. If zero, don't use DP.")
 ap.add_argument('--budget', type=float, default=0,
                 help='total privacy budget. Defaults to (eps * len(subsets)).')
-ap.add_argument('--perturb-type', type=str, choices=PERT_TYPES, default='bits',
+ap.add_argument('--perturb-type', type=str, choices=PERT_TYPES, default='best',
                 help='technique to use to perturb data')
 ap.add_argument('--perturb-frac', type=float, default=1,
                 help='fraction of users who will do any perturbation at all')

@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import pdb
 import random
-from anonml.aggregator import get_privacy_params
+from anonml.aggregator import get_privacy_params, best_perturb_method
 from sklearn.model_selection import KFold
 
 
@@ -195,7 +195,7 @@ def perturb_histograms(X, y, cardinality, method, epsilon, delta=0, sample=1,
 
     X: matrix of real feature data (X[row, column])
     y: array of real labels (y[row])
-    method: can be one of 'pram', 'bits', or 'gauss'
+    method: can be one of 'best', 'pram', 'bits', or 'gauss'
     perm_eps: the epsilon used to permanently perturb the label
 
     Output: dict mapping each subspace to a perturbed (X, y) pair
@@ -207,7 +207,7 @@ def perturb_histograms(X, y, cardinality, method, epsilon, delta=0, sample=1,
         return dont_perturb(X, y, subsets)
 
     # enforce valid perturbation method
-    if method not in ['bits', 'pram', 'gauss']:
+    if method not in ['bits', 'pram', 'gauss', 'best']:
         raise ValueError('Method cannot be %r' % method)
 
     # permanently perturb the y-values
@@ -255,18 +255,24 @@ def perturb_histograms(X, y, cardinality, method, epsilon, delta=0, sample=1,
         m = hsize(subset)
         categoricals = [hist_idx(subset, row) for row in rows]
 
-        if method == 'pram':
+        # with the 'best' method, figure out what's best for each histogram
+        if method == 'best':
+            meth = best_perturb_method(m, len(rows), epsilon)
+        else:
+            meth = method
+
+        if meth == 'pram':
             # lambda parameter: each peer's real value is lambda times more
             # likely to be reported than any other value.
             old_hist, pert_hist = perturb_hist_pram(categoricals, m,
                                                     epsilon, sample)
-        elif method == 'bits':
+        elif meth == 'bits':
             # lambda parameter: each peer's real value is lambda times more
             # likely to be reported than any other value.
             old_hist, pert_hist = perturb_hist_bits(categoricals, m,
                                                     epsilon, sample)
 
-        elif method == 'gauss':
+        elif meth == 'gauss':
             old_hist, pert_hist = perturb_hist_gauss(categoricals, m,
                                                      epsilon, delta)
 

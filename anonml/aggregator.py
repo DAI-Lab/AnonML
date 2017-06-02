@@ -3,6 +3,20 @@ import pandas as pd
 import pdb
 
 
+def mle_se(m, n, p, q):
+    """ calculate the standard error of the MLE method """
+    # standard error of one cell
+    base = m * n * q * (1 - q)
+    extra = n * (p * (1-p) - q * (1-q))
+    total_var = base + extra
+    stderr = np.sqrt(total_var) / ((p - q) * n)
+
+    # see paper for details
+    se = np.sqrt(((m - 1) * q * (1 - q) + p * (1 - p)) / n) / (p - q)
+    se = ((m - 1) * q * (1 - q) + p * (1 - p)) / (n * (p - q)**2)
+    return se
+
+
 def get_privacy_params(m, eps):
     """
     given m and epsilon, find the optimal p and q
@@ -45,6 +59,19 @@ def get_rr_params(m, eps):
     q = 1. / (lam + m - 1)
     return p, q
 
+def best_perturb_method(m, n, eps):
+    """
+    pretty straightforward: given m, n, epsilon, which method minimizes error?
+    """
+    p_rr, q_rr = get_rr_params(m, eps)
+    p_bits, q_bits = get_privacy_params(m, eps)
+    se_rr = mle_se(m, n, p_rr, q_rr)
+    se_bits = mle_se(m, n, p_bits, q_bits)
+
+    if se_bits < se_rr:
+        return 'bits'
+    else:
+        return 'pram'
 
 # accepts bit strings from clients and generates, normalizes histogram
 
