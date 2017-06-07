@@ -32,7 +32,7 @@ ap.add_argument('-v', '--verbose', type=int, default=0,
 
 ap.add_argument('--sample', type=float, default=1,
                 help='probability that each peer will send any data at all')
-ap.add_argument('--epsilon', type=float, default=0,
+ap.add_argument('--epsilon', type=float, default=1,
                 help="differential privacy parameter. If zero, don't use DP.")
 ap.add_argument('--perturb-type', type=str, choices=PERT_TYPES, default='bits',
                 help='technique to use to perturb data')
@@ -53,7 +53,7 @@ ap.add_argument('--synth-dist', type=str, choices=DIST_TYPES, default='random',
                 help='distribution from which to draw random data')
 ap.add_argument('--n-peers', type=int, default=10000,
                 help='number of peers to generate data for')
-ap.add_argument('--cardinality', type=int, default=100,
+ap.add_argument('--cardinality', type=int, default=16,
                 help='cardinality of the categorical variable to generate')
 
 EPSILONS = [0.1, 0.25, 0.5, 0.8, 1., 1.5, 2., 3., 4.]
@@ -71,18 +71,20 @@ def max_likelihood_count(n, p, q, count):
     return (est - q * n) / (p - q)
 
 
-def matrix_se(X, n, p, q):
+def matrix_se(m, n, p, q):
     """ calculate the standard error of the matrix method """
-    pmat = np.ones((X, X)) * q + np.identity(X) * (p - q)
+    ## TODO: this is wrong
+    pmat = np.ones((m, m)) * q + np.identity(m) * (p - q)
     ipmat = np.linalg.inv(pmat)
     a = ipmat[0, 0]
     b = ipmat[0, 1]
 
-    # standard error of one cell
-    se = np.sqrt((a**2 + (X - 1) * b**2) * n * p * q)
-    se /= n
+    # variance of one post-processed cell
+    var_fact = (a**2 + (m - 1) * b**2)
+    var = var_fact * n * p + (m - 1) * var_fact * n * q
+
     # expected l2 norm of histogram
-    return np.sqrt(X) * se
+    return np.sqrt(var)
 
 
 def mle_se(m, n, p, q):
@@ -94,9 +96,8 @@ def mle_se(m, n, p, q):
     stderr = np.sqrt(total_var) / ((p - q) * n)
 
     # see paper for details
-    se = np.sqrt(((m - 1) * q * (1 - q) + p * (1 - p)) / n) / (p - q)
-    se = ((m - 1) * q * (1 - q) + p * (1 - p)) / (n * (p - q)**2)
-    return se
+    var = ((m - 1) * q * (1 - q) + p * (1 - p)) / (n * (p - q)**2)
+    return np.sqrt(var)
 
 
 def bitvec_test(epsilons, p):
@@ -154,7 +155,8 @@ def load_data():
     ## TODO
 
 
-def test_errors(epsilons, dist=None, method='bits', trials=10):
+def test_errors(epsilon, dist=None, method='bits', trials=10,
+                postprocess=postprocess_histogram):
     """
     dist: numpy array of probabilities for each category
     """
@@ -171,33 +173,23 @@ def test_errors(epsilons, dist=None, method='bits', trials=10):
     for t in range(trials):
         values.append(np.random.choice(np.arange(args.cardinality),
                                        size=args.n_peers, replace=True, p=dist))
+    for i, vals in enumerate(values):
+        print 'trial %d/%d' % (i, trials)
+        # pert_func outputs two histograms, and l2_error accepts two
+        # histograms as arguments
+        real, pert = pert_func(vals, args.cardinality, epsilon, args.sample,
+                               postprocess=postprocess)
+        errs.append(l2_error(real, pert))
+        #if err[-1] > 25:
+            #pdb.set_trace()
 
-    for eps in epsilons:
-        err = []
-        for vals in values:
-            # pert_func outputs two histograms, and l2_error accepts two
-            # histograms as arguments
-            real, pert = pert_func(vals, args.cardinality, eps, args.sample)
-            err.append(l2_error(real, pert))
-            if err[-1] > 25:
-                pdb.set_trace()
-        errs.append(err)
-
-    return errs
+    return np.array(errs).mean()
 
 
-def plot_real_vs_est():
-    """
-    Generate a synthetic dataset, simulate perturbation/estimation, and graph
-    the perturbed dataset next to the real one as histograms.
-    """
+def dist_and_pert():
     method = args.perturb_type
     dist_type = args.synth_dist
-    eps = args.epsilon
     m = args.cardinality
-    n = args.n_peers
-    sample = args.sample
-    trials = args.n_trials
 
     if args.data_file is not None:
         dist = load_data()
@@ -216,6 +208,21 @@ def plot_real_vs_est():
         pert_func = perturb_hist_pram
     elif method == 'gauss':
         pert_func = perturb_hist_gauss
+
+    return dist, pert_func
+
+
+def plot_real_vs_est():
+    """
+    Generate a synthetic dataset, simulate perturbation/estimation, and graph
+    the perturbed dataset next to the real one as histograms.
+    """
+    eps = args.epsilon
+    m = args.cardinality
+    n = args.n_peers
+    sample = args.sample
+    trials = args.n_trials
+    dist, pert_func = dist_and_pert()
 
     values = np.random.choice(np.arange(m), size=n, replace=True, p=dist)
     estimates = []
@@ -390,35 +397,64 @@ def plot_standard_error():
     ax.set_yscale("log")
     eps = EPSILONS
     N = args.n_peers
-    X = args.cardinality
+    m = args.cardinality
+
+    dist, _ = dist_and_pert()
 
     mle_errs = []
     mat_errs = []
+    mle_test = []
+    mat_test = []
     for e in eps:
+        print
+        print 'epsilon', e
         # bits
         lam = np.exp(e / 2)
         p = lam / float(lam + 1)
         q = 1 / float(lam + 1)
-        mle_errs.append(mle_se(X, N, p, q))
-        mat_errs.append(matrix_se(X, N, p, q))
+        mle_errs.append(mle_se(m, N, p, q))
+        mat_errs.append(matrix_se(m, N, p, q))
 
-    mle_bits, = ax.plot(eps, mle_errs, label='mle-bits')
-    mat_bits, = ax.plot(eps, mat_errs, label='mat-bits')
+        mle_test.append(test_errors(e, dist=dist, method='bits', trials=10,
+                                    postprocess=postprocess_histogram_mle))
+        mat_test.append(test_errors(e, dist=dist, method='bits', trials=10,
+                                    postprocess=postprocess_histogram_matrix))
+
+    mle_est_plt, = ax.plot(eps, mle_errs, label='MLE (estimate)')
+    mat_est_plt, = ax.plot(eps, mat_errs, label='Matrix (estimate)')
+    mle_test_plt, = ax.plot(eps, mle_test, label='MLE (test)')
+    mat_test_plt, = ax.plot(eps, mat_test, label='Matrix (test)')
+
+    plt.legend(handles=[mle_est_plt, mat_est_plt, mle_test_plt, mat_test_plt])
+    plt.show()
+
+    ax = plt.subplot()
+    ax.set_xscale("log")
+    ax.set_yscale("log")
 
     mle_errs = []
     mat_errs = []
+    mle_test = []
+    mat_test = []
     for e in eps:
         # pram
         lam = np.exp(e)
-        p = lam / float(lam + N - 1)
-        q = 1 / float(lam + N - 1)
-        mle_errs.append(mle_se(X, N, p, q))
-        mat_errs.append(matrix_se(X, N, p, q))
+        p = lam / float(lam + m - 1)
+        q = 1 / float(lam + m - 1)
+        mle_errs.append(mle_se(m, N, p, q))
+        mat_errs.append(matrix_se(m, N, p, q))
 
-    mle_pram, = ax.plot(eps, mle_errs, label='mle-pram')
-    mat_pram, = ax.plot(eps, mat_errs, label='mat-pram')
+        mle_test.append(test_errors(e, dist=dist, method='pram', trials=10,
+                                    postprocess=postprocess_histogram_mle))
+        mat_test.append(test_errors(e, dist=dist, method='pram', trials=10,
+                                    postprocess=postprocess_histogram_matrix))
 
-    plt.legend(handles=[mle_bits, mat_bits, mle_pram, mat_pram])
+    mle_est_plt, = ax.plot(eps, mle_errs, label='MLE (estimate)')
+    mat_est_plt, = ax.plot(eps, mat_errs, label='Matrix (estimate)')
+    mle_test_plt, = ax.plot(eps, mle_test, label='MLE (test)')
+    mat_test_plt, = ax.plot(eps, mat_test, label='Matrix (test)')
+
+    plt.legend(handles=[mle_est_plt, mat_est_plt, mle_test_plt, mat_test_plt])
     plt.show()
 
 
