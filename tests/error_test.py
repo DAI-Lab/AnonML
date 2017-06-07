@@ -13,7 +13,7 @@ from anonml.subset_forest import SubsetForest
 from anonml.aggregator import get_privacy_params, get_rappor_params, get_rr_params
 from perturb import *
 
-TEST_TYPES = ['compare-dist', 'stderr', 'expected-err', 'plot-hist']
+TEST_TYPES = ['compare-dist', 'stderr', 'expected-err', 'plot-hist', 'p-vs-m']
 
 PERT_TYPES = ['bits', 'pram', 'gauss']
 
@@ -38,6 +38,8 @@ ap.add_argument('--perturb-type', type=str, choices=PERT_TYPES, default='bits',
                 help='technique to use to perturb data')
 ap.add_argument('--perturb-frac', type=float, default=1,
                 help='fraction of users who will do any perturbation at all')
+ap.add_argument('--plot-by', type=str, default='m', choices=['m', 'epsilon'],
+                help='variable to graph on the x-axis')
 
 ap.add_argument('--bin-size', type=int, default=3,
                 help='number of features per generated subset')
@@ -218,7 +220,10 @@ def plot_real_vs_est():
     values = np.random.choice(np.arange(m), size=n, replace=True, p=dist)
     estimates = []
     for _ in range(trials):
-        real, pert = pert_func(values, m, eps, sample)
+        try:
+            real, pert = pert_func(values, m, eps, sample)
+        except:
+            pdb.set_trace()
         estimates.append(pert)
 
     if trials > 1:
@@ -254,19 +259,19 @@ def plot_real_vs_est():
     plt.show()
 
 
-def plot_expected_error(by='m'):
+def plot_expected_error():
     """
-    Plot the expected error as a function of m or epsilon
+    Plot the expected error of a histogram estimation as a function of m or
+    epsilon for fixed N
     """
-    mins = []
+    by = args.plot_by
     min_err = []
-    defaults = []
     def_err = []
-    pram = []
     pram_err = []
 
     epsilons = np.arange(0.1, 10, 0.1)
     Ms = np.arange(2, 100, 1)
+
     m = args.cardinality
     n = args.n_peers
     eps = args.epsilon
@@ -276,6 +281,8 @@ def plot_expected_error(by='m'):
     elif by == 'epsilon':
         X = epsilons
 
+    errs = pd.DataFrame(index=X, columns=['bits', 'rappor', 'rand_response'])
+
     for x in X:
         if by == 'm':
             m = x
@@ -284,18 +291,15 @@ def plot_expected_error(by='m'):
 
         # find the minimum according to our sympy-solved solution
         p, q = get_privacy_params(m, eps)
-        mins.append((x, p))
-        min_err.append((x, mle_se(m, n, p, q)))
+        errs.loc[x, 'bits'] = mle_se(m, n, p, q)
 
         # plot the q = 1-p case for comparison
         p, q = get_rappor_params(m, eps)
-        defaults.append((x, p))
-        def_err.append((x, mle_se(m, n, p, q)))
+        errs.loc[x, 'rappor'] = mle_se(m, n, p, q)
 
         # and plot the random response case
         p, q = get_rr_params(m, eps)
-        pram.append((x, p))
-        pram_err.append((x, mle_se(m, n, p, q)))
+        errs.loc[x, 'rand_response'] = mle_se(m, n, p, q)
 
     # connect the minimum point on each curve
     #fig, ax1 = plt.subplots()
@@ -311,33 +315,29 @@ def plot_expected_error(by='m'):
     ax2.set_ylabel('standard error')
     ax2.set_yscale('log')
 
-    ax2.plot(*zip(*min_err))
-    ax2.plot(*zip(*def_err))
-    ax2.plot(*zip(*pram_err))
+    ax2.plot(errs.index, errs['bits'])
+    ax2.plot(errs.index, errs['rappor'])
+    ax2.plot(errs.index, errs['rand_response'])
+
+    errs[by] = errs.index
+    outfile = 'error-by-%s.csv' % by
+    with open(outfile, 'w') as f:
+        errs.to_csv(outfile, index=False)
 
     plt.show()
 
 
-def calculate_errors(eps, p=None, pram=False):
-    errs = []
-    lam = np.exp(e)
-
-    if p is None and not pram:
-        lam **= 0.5
-
-    for e in eps:
-        # bits with fixed p
-        x = p / (lam * (1 - p)) # temp variable for readability
-        q = x / (1 + x)
-        errs.append(mle_se(X, N, p, q))
-    return errs
-
-    for e in eps:
-        # pram
-        lam = np.exp(e)
-        p = lam / float(lam + X - 1)
-        q = 1 / float(lam + X - 1)
-        errs.append(mle_se(X, N, p, q))
+def plot_p_vs_m():
+    X = np.arange(2, 100)
+    eps = args.epsilon
+    df = pd.DataFrame(index=X, columns=['p-bits', 'p-rappor', 'p-rand-response',
+                                        'q-bits', 'q-rappor', 'q-rand-response'])
+    for m in X:
+        df['p-bits'][m], df['q-bits'][m] = get_privacy_params(m, eps)
+        df['p-rappor'][m], df['q-rappor'][m] = get_rappor_params(m, eps)
+        df['p-rand-response'][m], df['q-rand-response'][m] = get_rr_params(m, eps)
+    df['m'] = df.index
+    df.to_csv('p-vs-m.csv', index=False)
 
 
 def compare_distributions():
@@ -432,6 +432,8 @@ def main():
             plot_expected_error()
         if test == 'plot-hist':
             plot_real_vs_est()
+        if test == 'p-vs-m':
+            plot_p_vs_m()
 
 
 if __name__ == '__main__':
