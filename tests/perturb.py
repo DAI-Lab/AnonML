@@ -178,11 +178,10 @@ def dont_perturb(X, y, subsets):
     """
     output = {}
     folds = generate_partitions(X, len(subsets))
-    for i, sets in subsets.items():
-        rows = folds[i]
-        for subset in sets:
-            indexer = np.ix_(rows, subset)
-            output[subset] = X[indexer], y[rows]
+    for subset, parts in subsets.items():
+        rows = np.concatenate([folds[p] for p in parts])
+        indexer = np.ix_(rows, subset)
+        output[subset] = X[indexer], y[rows]
     return output
 
 
