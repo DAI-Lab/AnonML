@@ -21,6 +21,7 @@ from sklearn.naive_bayes import GaussianNB
 from sklearn.model_selection import KFold
 from sklearn.metrics import roc_curve, auc
 from sklearn.metrics.scorer import check_scoring
+from sklearn.linear_model import LinearRegression, Lasso
 from anonml.subset_forest import SubsetForest
 from perturb import perturb_histograms
 from make_features import bucket_data
@@ -477,12 +478,12 @@ def compare_classifiers():
         scores.set_value('adaboost', met + '-std', arr.std())
 
     # gradient boosting
-    res = test_classifier(classifier=GradientBoostingClassifier, df=df,
-                          y=labels, n_trials=args.num_trials,
-                          n_folds=args.num_folds)
-    for met, arr in res.items():
-        scores.set_value('gradient-boost', met + '-mean', arr.mean())
-        scores.set_value('gradient-boost', met + '-std', arr.std())
+    #res = test_classifier(classifier=GradientBoostingClassifier, df=df,
+                          #y=labels, n_trials=args.num_trials,
+                          #n_folds=args.num_folds)
+    #for met, arr in res.items():
+        #scores.set_value('gradient-boost', met + '-mean', arr.mean())
+        #scores.set_value('gradient-boost', met + '-std', arr.std())
 
     outfile = args.out_file or 'compare-classifiers.csv'
     with open(outfile, 'w') as f:
@@ -724,7 +725,7 @@ def plot_perturbation_datasets():
     ]
 
     # try ten different budgets, with epsilon from 1 to 5
-    budget = np.linspace(1, 5, 10)
+    budget = np.linspace(1, 8, 15)
     scores = pd.DataFrame(index=budget, columns=[f[-1] + '-mean' for f in files] +
                                                 [f[-1] + '-std' for f in files])
 
