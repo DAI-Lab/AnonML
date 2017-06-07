@@ -178,11 +178,12 @@ def bucket_data(df, buckets, label=None, privacy=None, verbose=0,
             if bins[i] <= bins[i - 1]:
                 bins[i] = bins[i - 1] + epsilon
 
-        cuts = pd.tools.tile._bins_to_cuts(arr, bins, labels=range(buckets),
-                                           include_lowest=True)
-
-        df[col] = cuts
+        df[col] = pd.cut(arr, bins, labels=range(buckets), include_lowest=True)
         continue
+
+        # tools.tile gone as of pandas 16 :(
+        #cuts = pd.tools.tile._bins_to_cuts(arr, bins, labels=range(buckets),
+                                           #include_lowest=True)
 
         #df[col] = pd.qcut(df[col], buckets, labels=range(buckets))
 

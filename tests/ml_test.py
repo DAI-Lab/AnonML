@@ -26,9 +26,10 @@ from perturb import perturb_histograms
 from make_features import bucket_data
 
 
-TEST_TYPES = ['compare-classifiers', 'subset-size-datasets',
-              'perturbation-subset-size', 'perturbation',
-              'perturbation-datasets', 'binning-datasets', 'simple']
+TEST_TYPES = ['simple', 'compare-classifiers',
+              'binning-datasets', 'subset-size-datasets',
+              'perturbation', 'perturbation-subset-size',
+              'perturbation-datasets', 'perturbation-partitions']
 
 PERT_TYPES = ['bits', 'pram', 'gauss', 'best']
 
@@ -185,6 +186,9 @@ def test_classifier_once(classifier, kwargs, train_idx, test_idx, metrics,
 
     bucket: whether to do private bucketing of features at the last minute
     """
+    if args.verbose >= 2:
+        print "Spawning test thread!"
+
     # initialize a new classifier
     clf = classifier(**kwargs)
 
@@ -253,15 +257,16 @@ def test_classifier_once(classifier, kwargs, train_idx, test_idx, metrics,
                                                      sum(y_test))
 
         tree_scores = []
-        for subset, tree in clf.trees.items():
+        for subset, tree in clf.classifiers.items():
             scorer = check_scoring(tree, scoring='roc_auc')
             tree_scores.append((-scorer(tree, X_test[:, subset], y_test),
+                                clf.scores[subset]['roc_auc'],
                                 [clf.cols[s] for s in subset]))
             for s in subset:
                 global_total[clf.cols[s]] += -tree_scores[-1][0]
 
         for ts in sorted(tree_scores)[:3]:
-            print -ts[0], ts[1]
+            print '\tpredicted: %.3f, actual: %.3f' % (ts[1], -ts[0]), ts[2]
 
     if args.plot_roc:
         y_scores = clf.predict_proba(X_test)
@@ -816,64 +821,61 @@ def plot_perturbation_partitions():
     del df[args.label]
 
     partitions = [2**i for i in range(7)]
-    scores = pd.DataFrame(index=budget, columns=[str(p[0]) + '-mean' for p in pairs] +
-                                                [str(p[0]) + '-std' for p in pairs])
+    budget = np.linspace(1, 5, 10)
+    scores = pd.DataFrame(index=budget,
+                          columns=[str(p) + '-mean' for p in partitions] +
+                                  [str(p) + '-std' for p in partitions])
 
     print
-    print 'Testing performance on perturbed data with different feature subset sizes'
+    print 'Testing performance on perturbed data with different partition sizes'
     print
 
     n_trials = args.num_trials
     n_folds = args.num_folds
     n_parts = args.num_partitions
     n_subsets = args.num_subsets
-    trials_per_ss = args.trials_per_subset
 
     for n_parts in partitions:
-        print 'Testing perturbation for subset size', subset_size
-        shape = (n_trials * trials_per_ss, len(budget))
+        print 'Testing perturbation for', n_parts, 'partitions'
+        shape = (n_trials, len(budget))
         results = pd.DataFrame(np.zeros(shape), columns=budget)
 
         # try each perturbation level with several different subspaces, but keep
         # those subspaces consistent
-        for i in range(n_trials):
+        for b in budget:
+            eps = b / float(n_subsets)
+            res = test_classifier(classifier=SubsetForest,
+                                  df=df,
+                                  y=labels,
+                                  epsilon=eps,
+                                  perturb_type=args.perturb_type,
+                                  n_trials=n_trials,
+                                  n_folds=n_folds,
+                                  n_parts=n_parts,
+                                  n_subsets=n_subsets,
+                                  subset_size=args.subset_size,
+                                  bucket=True,
+                                  cols=list(df.columns))
+
+            start = i * n_trials
+            end = (i + 1) * n_trials - 1
+            results.ix[start:end, b] = res['auc']
             print
-            print 'Testing subspace permutation %d/%d, %d trials each' % \
-                (i+1, n_trials, trials_per_ss)
-
-            subsets = generate_subspaces(df.shape[1], subset_size, n_parts, n_subsets)
-            for b in budget:
-                eps = b / float(n_subsets)
-                res = test_classifier(classifier=SubsetForest,
-                                      df=df,
-                                      y=labels,
-                                      subsets=subsets,
-                                      epsilon=eps,
-                                      perturb_type=args.perturb_type,
-                                      n_trials=trials_per_ss,
-                                      n_folds=n_folds,
-                                      bucket=True,
-                                      cols=list(df.columns))
-
-                start = i * trials_per_ss
-                end = (i + 1) * trials_per_ss - 1
-                results.ix[start:end, b] = res['auc']
-                print
-                print 'budget = %.2f: %.3f (+- %.3f)' % (
-                    b, res['auc'].mean(), res['auc'].std())
-                print
+            print '%d parts, budget = %.2f: %.3f (+- %.3f)' % (
+                n_parts, b, res['auc'].mean(), res['auc'].std())
+            print
 
         # aggregate the scores for each trial
         for b in budget:
             mean = results[b].as_matrix().mean()
             std = results[b].as_matrix().std()
-            scores.ix[b, '%d-mean' % subset_size] = mean
-            scores.ix[b, '%d-std' % subset_size] = std
+            scores.ix[b, '%d-mean' % n_parts] = mean
+            scores.ix[b, '%d-std' % n_parts] = std
             print '\tbudget = %.3f: %.3f (+- %.3f)' % (b, mean, std)
 
         if args.plot:
-            plt.errorbar(budget, scores['%d-mean' % subset_size],
-                         yerr=scores['%d-std' % subset_size],
+            plt.errorbar(budget, scores['%d-mean' % n_parts],
+                         yerr=scores['%d-std' % n_parts],
                          fmt=fmt)
 
     outfile = args.out_file or 'perturbation-subset-size.csv'
