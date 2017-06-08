@@ -857,9 +857,7 @@ def plot_perturbation_partitions():
                                   bucket=True,
                                   cols=list(df.columns))
 
-            start = i * n_trials
-            end = (i + 1) * n_trials - 1
-            results.ix[start:end, b] = res['auc']
+            results[b] = res['auc']
             print
             print '%d parts, budget = %.2f: %.3f (+- %.3f)' % (
                 n_parts, b, res['auc'].mean(), res['auc'].std())
@@ -869,8 +867,8 @@ def plot_perturbation_partitions():
         for b in budget:
             mean = results[b].as_matrix().mean()
             std = results[b].as_matrix().std()
-            scores.ix[b, '%d-mean' % n_parts] = mean
-            scores.ix[b, '%d-std' % n_parts] = std
+            scores.loc[b, '%d-mean' % n_parts] = mean
+            scores.loc[b, '%d-std' % n_parts] = std
             print '\tbudget = %.3f: %.3f (+- %.3f)' % (b, mean, std)
 
         if args.plot:
@@ -878,7 +876,7 @@ def plot_perturbation_partitions():
                          yerr=scores['%d-std' % n_parts],
                          fmt=fmt)
 
-    outfile = args.out_file or 'perturbation-subset-size.csv'
+    outfile = args.out_file or 'perturbation-num-partitions.csv'
     with open(outfile, 'w') as f:
         scores.to_csv(f)
 
