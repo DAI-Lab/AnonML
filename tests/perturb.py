@@ -69,7 +69,8 @@ postprocess_histogram = postprocess_histogram_mle
 ##  Perturbation functions  ###################################################
 ###############################################################################
 
-def perturb_hist_pram(values, m, epsilon, sample):
+def perturb_hist_pram(values, m, epsilon, sample,
+                      postprocess=postprocess_histogram):
     lam = np.exp(epsilon) / sample  # TODO: is this right?
 
     # create two blank histograms: one for the real values, one for the
@@ -97,12 +98,13 @@ def perturb_hist_pram(values, m, epsilon, sample):
             pert_hist[idx] += 1
 
     # MLE of actual counts
-    final_hist = postprocess_histogram(pert_hist, p, q, len(values), m)
+    final_hist = postprocess(pert_hist, p, q, len(values), m)
 
     return old_hist, final_hist
 
 
-def perturb_hist_bits(values, m, epsilon, sample, p=None):
+def perturb_hist_bits(values, m, epsilon, sample,
+                      postprocess=postprocess_histogram):
     """
     Perturb each feature subspace separately.
     Each peer sends a bit vector representing the presence or absence of each
@@ -135,7 +137,7 @@ def perturb_hist_bits(values, m, epsilon, sample, p=None):
         if sample == 1 or random.random() < sample:
             pert_hist += myhist
 
-    final_hist = postprocess_histogram(pert_hist.copy(), p, q, len(values), m)
+    final_hist = postprocess(pert_hist.copy(), p, q, len(values), m)
 
     return old_hist, final_hist
 
@@ -178,11 +180,10 @@ def dont_perturb(X, y, subsets):
     """
     output = {}
     folds = generate_partitions(X, len(subsets))
-    for i, sets in subsets.items():
-        rows = folds[i]
-        for subset in sets:
-            indexer = np.ix_(rows, subset)
-            output[subset] = X[indexer], y[rows]
+    for subset, parts in subsets.items():
+        rows = np.concatenate([folds[p] for p in parts])
+        indexer = np.ix_(rows, subset)
+        output[subset] = X[indexer], y[rows]
     return output
 
 
@@ -245,7 +246,8 @@ def perturb_histograms(X, y, cardinality, method, epsilon, delta=0, sample=1,
     errs = []
 
     # partitions of the feature matrix
-    folds = generate_partitions(X, len(subsets))
+    n_parts = len(set(sum((p for p in subsets.values()), [])))
+    folds = generate_partitions(X, n_parts)
 
     # iterate over subsets on the outside
     for subset, parts in subsets.items():
