@@ -246,7 +246,8 @@ def perturb_histograms(X, y, cardinality, method, epsilon, delta=0, sample=1,
     errs = []
 
     # partitions of the feature matrix
-    folds = generate_partitions(X, len(subsets))
+    n_parts = len(set(sum((p for p in subsets.values()), [])))
+    folds = generate_partitions(X, n_parts)
 
     # iterate over subsets on the outside
     for subset, parts in subsets.items():

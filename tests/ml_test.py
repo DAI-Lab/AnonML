@@ -725,7 +725,7 @@ def plot_perturbation_datasets():
     ]
 
     # try ten different budgets, with epsilon from 1 to 5
-    budget = np.linspace(1, 8, 15)
+    budget = np.linspace(0.1, 2.5, 10)
     scores = pd.DataFrame(index=budget, columns=[f[-1] + '-mean' for f in files] +
                                                 [f[-1] + '-std' for f in files])
 

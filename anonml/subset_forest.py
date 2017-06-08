@@ -140,10 +140,10 @@ class SubsetForest(ForestClassifier):
                 y_train, y_test = y[train_index], y[test_index]
 
                 # create new decision tree classifier
-                clf = sktree.DecisionTreeClassifier(class_weight='balanced',
-                                                     max_depth=self.max_tree_depth)
+                #clf = sktree.DecisionTreeClassifier(class_weight='balanced',
+                                                     #max_depth=self.max_tree_depth)
                 # Actually, let's make it a regression
-                #clf = LogisticRegression(class_weight='balanced')
+                clf = LogisticRegression(class_weight='balanced')
 
                 # sometimes this doesn't work because of
                 try:
@@ -167,9 +167,9 @@ class SubsetForest(ForestClassifier):
 
         for subset, (X, y) in training_data.items():
             # train classifier on whole dataset
-            clf = sktree.DecisionTreeClassifier(class_weight='balanced',
-                                                 max_depth=self.max_tree_depth)
-            #clf = LogisticRegression(class_weight='balanced')
+            #clf = sktree.DecisionTreeClassifier(class_weight='balanced',
+                                                 #max_depth=self.max_tree_depth)
+            clf = LogisticRegression(class_weight='balanced')
             clf.fit(X, y)
             self.classifiers[subset] = clf
             self.classes_ = clf.classes_
