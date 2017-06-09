@@ -821,7 +821,7 @@ def plot_perturbation_partitions():
     labels = df[args.label].values
     del df[args.label]
 
-    partitions = [2**i for i in range(7)]
+    partitions = [1, 8, 64] #[2**i for i in range(7)]
     budget = np.linspace(1, 5, 10)
     scores = pd.DataFrame(index=budget,
                           columns=[str(p) + '-mean' for p in partitions] +
