@@ -640,7 +640,7 @@ def plot_perturbation_subset_size():
     biggest_subset = 5
     pairs = zip(range(1, biggest_subset + 1), ['r', 'b', 'g', 'y', 'k'])
 
-    budget = np.linspace(1, 5, 10)
+    budget = np.linspace(0.5, 5, 15)
 
     scores = pd.DataFrame(index=budget, columns=[str(p[0]) + '-mean' for p in pairs] +
                                                 [str(p[0]) + '-std' for p in pairs])
@@ -725,7 +725,7 @@ def plot_perturbation_datasets():
     ]
 
     # try ten different budgets, with epsilon from 1 to 5
-    budget = np.linspace(0.1, 2.5, 10)
+    budget = np.linspace(0.5, 5, 15)
     scores = pd.DataFrame(index=budget, columns=[f[-1] + '-mean' for f in files] +
                                                 [f[-1] + '-std' for f in files])
 
@@ -822,7 +822,7 @@ def plot_perturbation_partitions():
     del df[args.label]
 
     partitions = [1, 8, 64] #[2**i for i in range(7)]
-    budget = np.linspace(1, 5, 10)
+    budget = np.linspace(0.5, 5, 15)
     scores = pd.DataFrame(index=budget,
                           columns=[str(p) + '-mean' for p in partitions] +
                                   [str(p) + '-std' for p in partitions])
@@ -882,7 +882,7 @@ def plot_perturbation_partitions():
         scores.to_csv(f)
 
     if args.plot:
-        plt.axis([1.0, 5.0, 0.5, 1.0])
+        plt.axis([0, 5.0, 0.5, 1.0])
         plt.xlabel('perturbation')
         plt.ylabel('roc_auc')
         plt.title('AUC vs. Perturbation, with Standard Deviation Error')
