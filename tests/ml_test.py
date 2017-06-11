@@ -576,7 +576,7 @@ def plot_subset_size_datasets():
         ('edx/6002x_f12/features-all-wk10-ld4.csv', 'edx-feats.txt', 'dropout', 'b', '6002x'),
         ('census/features.csv', 'census-feats.txt', 'label', 'g', 'census'),
     ]
-    biggest_subset = 6
+    biggest_subset = 5
     x = range(1, biggest_subset + 1)
     scores = pd.DataFrame(index=x, columns=[f[-1] + '-mean' for f in files] +
                                            [f[-1] + '-std' for f in files])
@@ -822,6 +822,82 @@ def plot_perturbation_partitions():
     del df[args.label]
 
     partitions = [1, 8, 64] #[2**i for i in range(7)]
+    budget = np.linspace(0.5, 5, 15)
+    scores = pd.DataFrame(index=budget,
+                          columns=[str(p) + '-mean' for p in partitions] +
+                                  [str(p) + '-std' for p in partitions])
+
+    print
+    print 'Testing performance on perturbed data with different partition sizes'
+    print
+
+    n_trials = args.num_trials
+    n_folds = args.num_folds
+    n_parts = args.num_partitions
+    n_subsets = args.num_subsets
+
+    for n_parts in partitions:
+        print 'Testing perturbation for', n_parts, 'partitions'
+        shape = (n_trials, len(budget))
+        results = pd.DataFrame(np.zeros(shape), columns=budget)
+
+        # try each perturbation level with several different subspaces, but keep
+        # those subspaces consistent
+        for b in budget:
+            eps = b / float(n_subsets)
+            res = test_classifier(classifier=SubsetForest,
+                                  df=df,
+                                  y=labels,
+                                  epsilon=eps,
+                                  perturb_type=args.perturb_type,
+                                  n_trials=n_trials,
+                                  n_folds=n_folds,
+                                  n_parts=n_parts,
+                                  n_subsets=n_subsets,
+                                  subset_size=args.subset_size,
+                                  bucket=True,
+                                  cols=list(df.columns))
+
+            results[b] = res['auc']
+            print
+            print '%d parts, budget = %.2f: %.3f (+- %.3f)' % (
+                n_parts, b, res['auc'].mean(), res['auc'].std())
+            print
+
+        # aggregate the scores for each trial
+        for b in budget:
+            mean = results[b].as_matrix().mean()
+            std = results[b].as_matrix().std()
+            scores.loc[b, '%d-mean' % n_parts] = mean
+            scores.loc[b, '%d-std' % n_parts] = std
+            print '\tbudget = %.3f: %.3f (+- %.3f)' % (b, mean, std)
+
+        if args.plot:
+            plt.errorbar(budget, scores['%d-mean' % n_parts],
+                         yerr=scores['%d-std' % n_parts],
+                         fmt=fmt)
+
+    outfile = args.out_file or 'perturbation-num-partitions.csv'
+    with open(outfile, 'w') as f:
+        scores.to_csv(f)
+
+    if args.plot:
+        plt.axis([0, 5.0, 0.5, 1.0])
+        plt.xlabel('perturbation')
+        plt.ylabel('roc_auc')
+        plt.title('AUC vs. Perturbation, with Standard Deviation Error')
+        plt.show()
+
+
+def plot_perturbation_method():
+    """
+    Plot performance as a function of number of partitions, for fixed budget.
+    """
+    df = load_csv(args.data_file, args.feature_file)
+    labels = df[args.label].values
+    del df[args.label]
+
+    partitions = ['pram', 'rappor', 'bits']
     budget = np.linspace(0.5, 5, 15)
     scores = pd.DataFrame(index=budget,
                           columns=[str(p) + '-mean' for p in partitions] +
