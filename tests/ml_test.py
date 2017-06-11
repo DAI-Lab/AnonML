@@ -627,7 +627,9 @@ def plot_subset_size_datasets():
         plt.show()
 
 
+################################################################################
 ## Part 2: differential privacy
+################################################################################
 
 def plot_perturbation_subset_size():
     """
@@ -638,12 +640,11 @@ def plot_perturbation_subset_size():
     del df[args.label]
 
     biggest_subset = 5
-    pairs = zip(range(1, biggest_subset + 1), ['r', 'b', 'g', 'y', 'k'])
-
+    sizes = range(1, biggest_subset + 1)
     budget = np.linspace(0.5, 5, 15)
 
-    scores = pd.DataFrame(index=budget, columns=[str(p[0]) + '-mean' for p in pairs] +
-                                                [str(p[0]) + '-std' for p in pairs])
+    scores = pd.DataFrame(index=budget, columns=[str(s) + '-mean' for s in sizes] +
+                                                [str(s) + '-std' for s in sizes])
 
     print
     print 'Testing performance on perturbed data with different feature subset sizes'
@@ -653,41 +654,35 @@ def plot_perturbation_subset_size():
     n_folds = args.num_folds
     n_parts = args.num_partitions
     n_subsets = args.num_subsets
-    trials_per_ss = args.trials_per_subset
 
-    for subset_size, fmt in pairs:
+    for subset_size in sizes:
         print 'Testing perturbation for subset size', subset_size
-        shape = (n_trials * trials_per_ss, len(budget))
+        shape = (n_trials, len(budget))
         results = pd.DataFrame(np.zeros(shape), columns=budget)
 
         # try each perturbation level with several different subspaces, but keep
         # those subspaces consistent
-        for i in range(n_trials):
+        for b in budget:
+            eps = b / float(n_subsets)
+            res = test_classifier(classifier=SubsetForest,
+                                  df=df,
+                                  y=labels,
+                                  epsilon=eps,
+                                  perturb_type=args.perturb_type,
+                                  n_trials=n_trials,
+                                  n_folds=n_folds,
+                                  n_parts=n_parts,
+                                  n_subsets=n_subsets,
+                                  subset_size=subset_size,
+                                  bucket=True,
+                                  cols=list(df.columns))
+
+            results[b] = res['auc']
+            err = res['auc'].std() / np.sqrt(n_trials)
             print
-            print 'Testing subspace permutation %d/%d, %d trials each' % \
-                (i+1, n_trials, trials_per_ss)
-
-            subsets = generate_subspaces(df.shape[1], subset_size, n_parts, n_subsets)
-            for b in budget:
-                eps = b / float(n_subsets)
-                res = test_classifier(classifier=SubsetForest,
-                                      df=df,
-                                      y=labels,
-                                      subsets=subsets,
-                                      epsilon=eps,
-                                      perturb_type=args.perturb_type,
-                                      n_trials=trials_per_ss,
-                                      n_folds=n_folds,
-                                      bucket=True,
-                                      cols=list(df.columns))
-
-                start = i * trials_per_ss
-                end = (i + 1) * trials_per_ss - 1
-                results.ix[start:end, b] = res['auc']
-                print
-                print 'budget = %.2f: %.3f (+- %.3f)' % (
-                    b, res['auc'].mean(), res['auc'].std())
-                print
+            print 'subset size %d, budget = %.2f: %.3f (+- %.3f)' % (
+                subset_size, b, res['auc'].mean(), err)
+            print
 
         # aggregate the scores for each trial
         for b in budget:
@@ -699,117 +694,17 @@ def plot_perturbation_subset_size():
 
         if args.plot:
             plt.errorbar(budget, scores['%d-mean' % subset_size],
-                         yerr=scores['%d-std' % subset_size],
-                         fmt=fmt)
+                         yerr=scores['%d-std' % subset_size])
 
     outfile = args.out_file or 'perturbation-subset-size.csv'
     with open(outfile, 'w') as f:
         scores.to_csv(f)
 
     if args.plot:
-        plt.axis([1.0, 5.0, 0.5, 1.0])
-        plt.xlabel('perturbation')
-        plt.ylabel('roc_auc')
-        plt.title('AUC vs. Perturbation, with Standard Deviation Error')
-        plt.show()
-
-
-def plot_perturbation_datasets():
-    """
-    Plot performance of a few different datasets by perturbation
-    """
-    files = [
-        ('edx/3091x_f12/features-all-wk10-ld4.csv', 'edx/edx-feats.txt', 'dropout', 'r', '3091x'),
-        ('edx/6002x_f12/features-all-wk10-ld4.csv', 'edx/edx-feats.txt', 'dropout', 'b', '6002x'),
-        ('census/features.csv', 'census/census-feats.txt', 'label', 'g', 'census'),
-    ]
-
-    # try ten different budgets, with epsilon from 1 to 5
-    budget = np.linspace(0.5, 5, 15)
-    scores = pd.DataFrame(index=budget, columns=[f[-1] + '-mean' for f in files] +
-                                                [f[-1] + '-std' for f in files])
-
-    # pull from the flags for now; these could also be set programatically
-    n_folds = args.num_folds
-    n_subsets = args.num_subsets
-    n_trials = args.num_trials
-    trials_per_ss = args.trials_per_subset
-
-    for f, feats, label, fmt, name in files:
-        print
-        print 'Testing perturbations on dataset', repr(name)
-        print
-        df = load_csv('data/' + f, 'features/' + feats)
-        labels = df[label].values
-        df = df
-        del df[label]
-
-        # we're gonna store results from each trial in a big array for now, then
-        # compute standard deviation on everything later
-        shape = (n_trials * trials_per_ss, len(budget))
-        results = pd.DataFrame(np.zeros(shape), columns=budget)
-
-        # try each perturbation level with several different subspaces, but keep
-        # those subspaces consistent
-        for i in range(n_trials):
-            print
-            print 'Testing subspace permutation %d/%d on %s, %d folds each' % \
-                (i+1, n_trials, name, n_folds)
-
-            # generate new set of subsets
-            subsets = generate_subspaces(df.shape[1], args.subset_size,
-                                         n_parts=args.num_partitions,
-                                         n_subsets=n_subsets)
-            for b in budget:
-                eps = b / n_subsets
-                if args.verbose >= 1:
-                    print
-                    print 'budget = %.3f / %d' % (b, n_subsets)
-
-                # dooo itt
-                res = test_classifier(classifier=SubsetForest,
-                                      df=df,
-                                      y=labels,
-                                      subsets=subsets,
-                                      epsilon=eps,
-                                      perturb_type=args.perturb_type,
-                                      n_folds=n_folds,
-                                      n_trials=trials_per_ss,
-                                      bucket=True,
-                                      cols=list(df.columns))
-
-                # results are in the form of an array, so we drop that into its
-                # appropriate slice here
-                start = i * trials_per_ss
-                end = (i + 1) * trials_per_ss - 1
-                results.ix[start:end, b] = res['auc']
-
-                if args.verbose >= 1:
-                    print '\tbudget = %.2f: %.3f (+- %.3f)' % (b, res['auc'].mean(),
-                                                               res['auc'].std())
-
-        print '%s results:' % name
-        # aggregate the scores for each trial
-        for b in budget:
-            mean = results[b].as_matrix().mean()
-            std = results[b].as_matrix().std()
-            scores.ix[b, name+'-mean'] = mean
-            scores.ix[b, name+'-std'] = std
-            print '\tbudget = %.3f: %.3f (+- %.3f)' % (b, mean, std)
-
-        if args.plot:
-            plt.errorbar(budget, scores[name+'-mean'], yerr=scores[name+'-std'],
-                         fmt=fmt)
-
-    outfile = args.out_file or 'pert-by-dataset.csv'
-    with open(outfile, 'w') as f:
-        scores.to_csv(f)
-
-    if args.plot:
-        plt.axis([0.0, 2.5, 0.5, 1.0])
+        plt.axis([0, 5.0, 0.5, 1.0])
         plt.xlabel('epsilon')
         plt.ylabel('roc_auc')
-        plt.title('AUC vs. Epsilon, with Standard Error')
+        plt.title('AUC vs. Perturbation, with Standard Deviation Error')
         plt.show()
 
 
@@ -859,9 +754,10 @@ def plot_perturbation_partitions():
                                   cols=list(df.columns))
 
             results[b] = res['auc']
+            err = res['auc'].std() / np.sqrt(n_trials)
             print
             print '%d parts, budget = %.2f: %.3f (+- %.3f)' % (
-                n_parts, b, res['auc'].mean(), res['auc'].std())
+                n_parts, b, res['auc'].mean(), err)
             print
 
         # aggregate the scores for each trial
@@ -874,8 +770,7 @@ def plot_perturbation_partitions():
 
         if args.plot:
             plt.errorbar(budget, scores['%d-mean' % n_parts],
-                         yerr=scores['%d-std' % n_parts],
-                         fmt=fmt)
+                         yerr=scores['%d-std' % n_parts])
 
     outfile = args.out_file or 'perturbation-num-partitions.csv'
     with open(outfile, 'w') as f:
@@ -883,9 +778,96 @@ def plot_perturbation_partitions():
 
     if args.plot:
         plt.axis([0, 5.0, 0.5, 1.0])
-        plt.xlabel('perturbation')
+        plt.xlabel('epsilon')
         plt.ylabel('roc_auc')
         plt.title('AUC vs. Perturbation, with Standard Deviation Error')
+        plt.show()
+
+
+def plot_perturbation_datasets():
+    """
+    Plot performance of a few different datasets by perturbation
+    """
+    files = [
+        ('edx/3091x_f12/features-all-wk10-ld4.csv', 'edx/edx-feats.txt', 'dropout', 'r', '3091x'),
+        ('edx/6002x_f12/features-all-wk10-ld4.csv', 'edx/edx-feats.txt', 'dropout', 'b', '6002x'),
+        ('census/features.csv', 'census/census-feats.txt', 'label', 'g', 'census'),
+    ]
+
+    # try ten different budgets, with epsilon from 1 to 5
+    budget = np.linspace(0.5, 5, 15)
+    scores = pd.DataFrame(index=budget, columns=[f[-1] + '-mean' for f in files] +
+                                                [f[-1] + '-std' for f in files])
+
+    # pull from the flags for now; these could also be set programatically
+    n_folds = args.num_folds
+    n_subsets = args.num_subsets
+    n_trials = args.num_trials
+    n_parts = args.num_partitions
+
+    for f, feats, label, fmt, name in files:
+        print
+        print 'Testing perturbations on dataset', repr(name)
+        print
+        df = load_csv('data/' + f, 'features/' + feats)
+        labels = df[label].values
+        df = df
+        del df[label]
+
+        # we're gonna store results from each trial in a big array for now, then
+        # compute standard deviation on everything later
+        shape = (n_trials, len(budget))
+        results = pd.DataFrame(np.zeros(shape), columns=budget)
+
+        for b in budget:
+            eps = b / float(n_subsets)
+            if args.verbose >= 1:
+                print
+                print 'budget = %.3f / %d' % (b, n_subsets)
+
+            # dooo itt
+            res = test_classifier(classifier=SubsetForest,
+                                  df=df,
+                                  y=labels,
+                                  epsilon=eps,
+                                  perturb_type=args.perturb_type,
+                                  n_folds=n_folds,
+                                  n_trials=n_trials,
+                                  n_parts=n_parts,
+                                  n_subsets=n_subsets,
+                                  bucket=True,
+                                  cols=list(df.columns))
+
+            # results are in the form of an array, so we drop that into its
+            # appropriate slice here
+            results[b] = res['auc']
+            err = res['auc'].std() / np.sqrt(n_trials)
+            if args.verbose >= 1:
+                print '%s, budget = %.2f: %.3f (+- %.3f)' % (
+                    name, b, res['auc'].mean(), err)
+
+        print '%s results:' % name
+        # aggregate the scores for each trial
+        for b in budget:
+            mean = results[b].as_matrix().mean()
+            std = results[b].as_matrix().std()
+            scores.ix[b, name+'-mean'] = mean
+            scores.ix[b, name+'-std'] = std
+            print '\tbudget = %.3f: %.3f (+- %.3f)' % (b, mean, std)
+
+        if args.plot:
+            plt.errorbar(budget, scores[name+'-mean'], yerr=scores[name+'-std'],
+                         fmt=fmt)
+
+    outfile = args.out_file or 'pert-by-dataset.csv'
+    with open(outfile, 'w') as f:
+        scores.to_csv(f)
+
+    if args.plot:
+        plt.axis([0.0, 5.0, 0.5, 1.0])
+        plt.xlabel('epsilon')
+        plt.ylabel('roc_auc')
+        plt.title('AUC vs. Epsilon, with Standard Error')
         plt.show()
 
 
