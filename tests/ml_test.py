@@ -32,7 +32,7 @@ TEST_TYPES = ['simple', 'compare-classifiers',
               'perturbation', 'perturbation-subset-size',
               'perturbation-datasets', 'perturbation-partitions']
 
-PERT_TYPES = ['bits', 'pram', 'gauss', 'best']
+PERT_TYPES = ['bits', 'rappor', 'pram', 'gauss', 'best']
 
 METRICS = ['f1', 'roc_auc', 'accuracy']
 
@@ -835,6 +835,7 @@ def plot_perturbation_datasets():
                                   n_trials=n_trials,
                                   n_parts=n_parts,
                                   n_subsets=n_subsets,
+                                  subset_size=args.subset_size,
                                   bucket=True,
                                   cols=list(df.columns))
 
@@ -879,11 +880,11 @@ def plot_perturbation_method():
     labels = df[args.label].values
     del df[args.label]
 
-    partitions = ['pram', 'rappor', 'bits']
+    methods = ['pram', 'rappor', 'bits']
     budget = np.linspace(0.5, 5, 15)
     scores = pd.DataFrame(index=budget,
-                          columns=[str(p) + '-mean' for p in partitions] +
-                                  [str(p) + '-std' for p in partitions])
+                          columns=[str(m) + '-mean' for m in methods] +
+                                  [str(m) + '-std' for m in methods])
 
     print
     print 'Testing performance on perturbed data with different partition sizes'
@@ -894,8 +895,8 @@ def plot_perturbation_method():
     n_parts = args.num_partitions
     n_subsets = args.num_subsets
 
-    for n_parts in partitions:
-        print 'Testing perturbation for', n_parts, 'partitions'
+    for method in methods:
+        print 'Testing performance with perturbation method', repr(method)
         shape = (n_trials, len(budget))
         results = pd.DataFrame(np.zeros(shape), columns=budget)
 
@@ -907,7 +908,7 @@ def plot_perturbation_method():
                                   df=df,
                                   y=labels,
                                   epsilon=eps,
-                                  perturb_type=args.perturb_type,
+                                  perturb_type=method,
                                   n_trials=n_trials,
                                   n_folds=n_folds,
                                   n_parts=n_parts,

@@ -40,9 +40,9 @@ def get_privacy_params(m, eps):
     return p, q
 
 
-def get_rappor_params(m, eps):
+def get_rappor_params(eps):
     """
-    given m and epsilon, find the optimal p and q
+    given epsilon, find the RAPPOR p and q
     """
     lam = np.exp(eps / 2)
     p = lam / float(lam + 1)
@@ -50,9 +50,9 @@ def get_rappor_params(m, eps):
     return p, q
 
 
-def get_rr_params(m, eps):
+def get_rr_params(eps):
     """
-    given m and epsilon, find random response p and q
+    given epsilon, find random response p and q
     """
     lam = np.exp(eps)
     p = lam / (lam + m - 1)

@@ -2,7 +2,8 @@ import pandas as pd
 import numpy as np
 import pdb
 import random
-from anonml.aggregator import get_privacy_params, best_perturb_method
+from anonml.aggregator import get_privacy_params, get_rappor_params, \
+                                best_perturb_method
 from sklearn.model_selection import KFold
 
 
@@ -104,7 +105,7 @@ def perturb_hist_pram(values, m, epsilon, sample,
 
 
 def perturb_hist_bits(values, m, epsilon, sample,
-                      postprocess=postprocess_histogram):
+                      postprocess=postprocess_histogram, rappor=False):
     """
     Perturb each feature subspace separately.
     Each peer sends a bit vector representing the presence or absence of each
@@ -117,7 +118,10 @@ def perturb_hist_bits(values, m, epsilon, sample,
     # if q = 1-p, this is p**2 / q**2
     lam = np.exp(epsilon)
 
-    p, q = get_privacy_params(m, epsilon)
+    if rappor:
+        p, q = get_rappor_params(epsilon)
+    else:
+        p, q = get_privacy_params(m, epsilon)
 
     # create two blank histograms: one for the real values, one for the
     # perturbed values
@@ -208,7 +212,7 @@ def perturb_histograms(X, y, cardinality, method, epsilon, delta=0, sample=1,
         return dont_perturb(X, y, subsets)
 
     # enforce valid perturbation method
-    if method not in ['bits', 'pram', 'gauss', 'best']:
+    if method not in ['bits', 'rappor', 'pram', 'gauss', 'best']:
         raise ValueError('Method cannot be %r' % method)
 
     # permanently perturb the y-values
@@ -264,16 +268,16 @@ def perturb_histograms(X, y, cardinality, method, epsilon, delta=0, sample=1,
             meth = method
 
         if meth == 'pram':
-            # lambda parameter: each peer's real value is lambda times more
-            # likely to be reported than any other value.
             old_hist, pert_hist = perturb_hist_pram(categoricals, m,
                                                     epsilon, sample)
         elif meth == 'bits':
-            # lambda parameter: each peer's real value is lambda times more
-            # likely to be reported than any other value.
             old_hist, pert_hist = perturb_hist_bits(categoricals, m,
-                                                    epsilon, sample)
-
+                                                    epsilon, sample,
+                                                    rappor=False)
+        elif meth == 'rappor':
+            old_hist, pert_hist = perturb_hist_bits(categoricals, m,
+                                                    epsilon, sample,
+                                                    rappor=True)
         elif meth == 'gauss':
             old_hist, pert_hist = perturb_hist_gauss(categoricals, m,
                                                      epsilon, delta)
