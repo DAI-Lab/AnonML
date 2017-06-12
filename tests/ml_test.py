@@ -30,7 +30,8 @@ from make_features import bucket_data
 TEST_TYPES = ['simple', 'compare-classifiers',
               'binning-datasets', 'subset-size-datasets',
               'perturbation', 'perturbation-subset-size',
-              'perturbation-datasets', 'perturbation-partitions']
+              'perturbation-datasets', 'perturbation-partitions',
+              'perturbation-method', 'method-subset-size']
 
 PERT_TYPES = ['bits', 'rappor', 'pram', 'gauss', 'best']
 
@@ -872,7 +873,7 @@ def plot_perturbation_datasets():
         plt.show()
 
 
-def plot_perturbation_method():
+def plot_perturbation_method_privacy():
     """
     Plot performance as a function of number of partitions, for fixed budget.
     """
@@ -881,7 +882,7 @@ def plot_perturbation_method():
     del df[args.label]
 
     methods = ['pram', 'rappor', 'bits']
-    budget = np.linspace(0.5, 5, 15)
+    budget = np.linspace(0.5, 10, 19)
     scores = pd.DataFrame(index=budget,
                           columns=[str(m) + '-mean' for m in methods] +
                                   [str(m) + '-std' for m in methods])
@@ -894,6 +895,7 @@ def plot_perturbation_method():
     n_folds = args.num_folds
     n_parts = args.num_partitions
     n_subsets = args.num_subsets
+    subset_size = args.subset_size
 
     for method in methods:
         print 'Testing performance with perturbation method', repr(method)
@@ -913,30 +915,109 @@ def plot_perturbation_method():
                                   n_folds=n_folds,
                                   n_parts=n_parts,
                                   n_subsets=n_subsets,
-                                  subset_size=args.subset_size,
-                                  bucket=True,
+                                  subset_size=subset_size,
+                                  bucket=False,
                                   cols=list(df.columns))
 
             results[b] = res['auc']
             print
-            print '%d parts, budget = %.2f: %.3f (+- %.3f)' % (
-                n_parts, b, res['auc'].mean(), res['auc'].std())
+            print 'method %s, budget = %.2f: %.3f (+- %.3f)' % (
+                method, b, res['auc'].mean(), res['auc'].std())
             print
 
         # aggregate the scores for each trial
+        print 'Method', method
         for b in budget:
             mean = results[b].as_matrix().mean()
             std = results[b].as_matrix().std()
-            scores.loc[b, '%d-mean' % n_parts] = mean
-            scores.loc[b, '%d-std' % n_parts] = std
+            scores.loc[b, '%d-mean' % method] = mean
+            scores.loc[b, '%d-std' % method] = std
             print '\tbudget = %.3f: %.3f (+- %.3f)' % (b, mean, std)
 
         if args.plot:
-            plt.errorbar(budget, scores['%d-mean' % n_parts],
+            plt.errorbar(budget, scores['%d-mean' % method],
+                         yerr=scores['%d-std' % method],
+                         fmt=fmt)
+
+    outfile = args.out_file or 'pert-method.csv'
+    with open(outfile, 'w') as f:
+        scores.to_csv(f)
+
+    if args.plot:
+        plt.axis([0, 5.0, 0.5, 1.0])
+        plt.xlabel('perturbation')
+        plt.ylabel('roc_auc')
+        plt.title('AUC vs. Perturbation, with Standard Deviation Error')
+        plt.show()
+
+
+def plot_perturbation_method_size():
+    """
+    Plot performance as a function of number of partitions, for fixed budget.
+    """
+    df = load_csv(args.data_file, args.feature_file)
+    labels = df[args.label].values
+    del df[args.label]
+
+    methods = ['pram', 'rappor', 'bits']
+    sizes = range(1, 7)
+    scores = pd.DataFrame(index=budget,
+                          columns=[str(m) + '-mean' for m in methods] +
+                                  [str(m) + '-std' for m in methods])
+
+    print
+    print 'Testing performance on perturbed data with different partition sizes'
+    print
+
+    n_trials = args.num_trials
+    n_folds = args.num_folds
+    n_parts = args.num_partitions
+    n_subsets = args.num_subsets
+    eps = args.epsilon
+
+    for method in methods:
+        print 'Testing performance with perturbation method', repr(method)
+        shape = (n_trials, len(sizes))
+        results = pd.DataFrame(np.zeros(shape), columns=sizes)
+
+        # try each perturbation level with several different subspaces, but keep
+        # those subspaces consistent
+        for size in sizes:
+            res = test_classifier(classifier=SubsetForest,
+                                  df=df,
+                                  y=labels,
+                                  epsilon=eps,
+                                  perturb_type=method,
+                                  n_trials=n_trials,
+                                  n_folds=n_folds,
+                                  n_parts=n_parts,
+                                  n_subsets=n_subsets,
+                                  subset_size=size,
+                                  bucket=False,
+                                  cols=list(df.columns))
+
+            results[b] = res['auc']
+            print
+            print 'method %s, cardinality = %d: %.3f (+- %.3f)' % (
+                method, 2**(size+1), res['auc'].mean(), res['auc'].std())
+            print
+
+        # aggregate the scores for each trial
+        print 'Method', method
+        for size in sizes:
+            mean = results[size].as_matrix().mean()
+            std = results[size].as_matrix().std()
+            scores.loc[size, '%d-mean' % method] = mean
+            scores.loc[size, '%d-std' % method] = std
+            print '\tcardinality = %d: %.3f (+- %.3f)' % (2**(size+1),
+                                                          mean, std)
+
+        if args.plot:
+            plt.errorbar(sizes, scores['%d-mean' % n_parts],
                          yerr=scores['%d-std' % n_parts],
                          fmt=fmt)
 
-    outfile = args.out_file or 'perturbation-num-partitions.csv'
+    outfile = args.out_file or 'method-subset-size.csv'
     with open(outfile, 'w') as f:
         scores.to_csv(f)
 
@@ -996,6 +1077,10 @@ def main():
             plot_perturbation_datasets()
         if test == 'perturbation-partitions':
             plot_perturbation_partitions()
+        if test == 'perturbation-method':
+            plot_perturbation_method_privacy()
+        if test == 'method-subset-size':
+            plot_perturbation_method_size()
         if test == 'simple':
             simple_test()
 
